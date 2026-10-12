@@ -27,7 +27,7 @@ struct ProfileView: View {
                 NavigationLink("备份、恢复与 iCloud", destination: DataSettingsView())
                 NavigationLink("提醒与计划设置", destination: SettingsView())
             }
-        }.navigationTitle("孩子档案").onDisappear { store.save() }
+        }.navigationTitle("孩子档案").stridePage().onDisappear { store.save() }
     }
 }
 struct AssessmentView: View {
@@ -49,7 +49,7 @@ struct AssessmentView: View {
                 ForEach(store.data.weaknesses) { w in Text("\(w.subject.rawValue) · \(w.title) · \(w.status)") }
                 Text("证据不足的维度保持待观察。不会生成智力或注意力诊断。").font(.caption)
             }
-        }.navigationTitle("能力观察")
+        }.navigationTitle("能力观察").stridePage()
     }
 }
 struct AISettingsView: View {
@@ -77,7 +77,7 @@ struct AISettingsView: View {
                 Text("此检测会实际访问配置的服务并可能产生费用；图片能力需在照片分析时验证。不自动切换服务商。").font(.caption).foregroundStyle(.secondary)
                 if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save(""); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } } }
             }
-        }.navigationTitle("AI 服务设置").onAppear { keyPresent = !SecretStore.load().isEmpty }
+        }.navigationTitle("AI 服务设置").stridePage().onAppear { keyPresent = !SecretStore.load().isEmpty }
         .onDisappear { key = ""; store.save() }
     }
     @discardableResult private func save() -> Bool {
@@ -109,7 +109,7 @@ struct SettingsView: View {
                 Button("保存并申请通知权限") { store.save(); Task { await ReminderService.update(store) } }
                 Text("每天通知打开当前计划。iOS 后台不保证每天动态计算题量，因此通知不携带可能过期的题目摘要。").font(.caption)
             }
-        }.navigationTitle("服务与计划设置")
+        }.navigationTitle("服务与计划设置").stridePage()
     }
 }
 struct DataSettingsView: View {
@@ -134,7 +134,7 @@ struct DataSettingsView: View {
                 Button("从 iCloud 读取最近备份") { Task { await download() } }.disabled(busy)
                 Text("此版本提供手动云端快照与恢复。自动多设备同步和冲突合并尚未开启。需要签名时配置 iCloud 容器；不可用时会明确报错。").font(.caption)
             }
-        }.navigationTitle("数据与恢复")
+        }.navigationTitle("数据与恢复").stridePage()
         .sheet(item: $share) { SystemShare(items: $0.items) }
         .fileImporter(isPresented: $importer, allowedContentTypes: [.json]) { result in
             do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; incoming = try Data(contentsOf: url); confirmRestore = true }

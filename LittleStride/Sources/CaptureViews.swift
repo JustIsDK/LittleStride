@@ -48,7 +48,7 @@ struct QuestionEditorView: View {
                 } else { store.add(question, knowledge: knowledge) }
                 dismiss()
             }.disabled(question.text.isEmpty)
-        }.navigationTitle(editing ? "核实与修改" : "录入题目")
+        }.navigationTitle(editing ? "核实与修改" : "录入题目").stridePage()
         .onChange(of: question.needsVerification) {
             if !question.needsVerification && question.screening == "待核实" { question.screening = question.parentID == nil ? "收录" : "生成练习" }
         }
@@ -57,7 +57,8 @@ struct QuestionEditorView: View {
 }
 struct CaptureView: View {
     @Environment(LearningStore.self) private var store
-    @State private var mode = "作业入库"
+    @State private var mode: String
+    init(initialMode: String = "作业入库") { _mode = State(initialValue: initialMode) }
     @State private var picker: PhotosPickerItem?
     @State private var image: UIImage?
     @State private var camera = false
@@ -68,7 +69,7 @@ struct CaptureView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("把学习过程留下来").font(.largeTitle.bold())
+                Text("把学习过程留下来").font(.title.weight(.semibold))
                 Picker("用途", selection: $mode) { ForEach(["作业入库", "教材与进度", "练习回录"], id: \.self) { Text($0) } }.pickerStyle(.segmented)
                 if mode == "练习回录" {
                     Text("选择已生成的练习单，再拍照核对作答。").foregroundStyle(.secondary)
@@ -81,20 +82,20 @@ struct CaptureView: View {
                         if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260) }
                         else { Image(systemName: "camera.viewfinder").font(.system(size: 50)).foregroundStyle(StrideStyle.green).frame(maxWidth: .infinity).padding(25) }
                         HStack {
-                            Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "此设备没有可用相机，请从相册选择。" } }.buttonStyle(.bordered)
-                            PhotosPicker(selection: $picker, matching: .images) { Label("相册", systemImage: "photo") }.buttonStyle(.bordered)
+                            Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "此设备没有可用相机，请从相册选择。" } }.buttonStyle(StrideButtonStyle(secondary: true))
+                            PhotosPicker(selection: $picker, matching: .images) { Label("相册", systemImage: "photo") }.buttonStyle(StrideButtonStyle(secondary: true))
                         }
                         Text(mode == "教材与进度" ? "可拍封面、版权页、目录或当前学习页。每次分析一张，确认后补充档案。" : "拍完整题干、作答和批改痕迹。看不清的内容不会自动确认。").font(.caption).foregroundStyle(.secondary)
                     }
                     NavigationLink("AI 配置与连接检查", destination: AISettingsView())
-                    Button(busy ? "分析中…" : "发送照片并分析") { Task { await analyze() } }.buttonStyle(.borderedProminent).disabled(image == nil || busy)
+                    Button(busy ? "分析中…" : "发送照片并分析") { Task { await analyze() } }.buttonStyle(StrideButtonStyle()).disabled(image == nil || busy)
                     Text("仅在点击分析后，照片发送至你配置的服务。失败保留照片，可重试。").font(.caption).foregroundStyle(.secondary)
                     ForEach(Array(results.enumerated()), id: \.offset) { _, q in NavigationLink(destination: QuestionEditorView(ai: q, imageID: imageID)) { StrideCard { Tag(text: q.subject); Text(q.text); Text(q.observation).font(.caption).foregroundStyle(.secondary); Text("核对并入库 →") } } }
                     if let textbook { NavigationLink("核对教材信息并填写档案", destination: TextbookConfirmView(analysis: textbook)) }
                     if mode == "作业入库" { NavigationLink("不用 AI，手动录入题目", destination: QuestionEditorView()) }
                 }
-            }.padding(20)
-        }.background(StrideStyle.background).navigationTitle("拍照录入").navigationBarTitleDisplayMode(.inline)
+            }.padding(24)
+        }.background(StrideStyle.background).navigationTitle("拍照录入").stridePage().navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $camera) { CameraPicker { image = $0; results = []; textbook = nil; imageID = nil } }
         .onChange(of: picker) { Task { if let bytes = try? await picker?.loadTransferable(type: Data.self), let selected = UIImage(data: bytes) { image = selected; results = []; textbook = nil; imageID = nil } } }
         .onChange(of: mode) { results = []; textbook = nil }
@@ -139,6 +140,6 @@ struct TextbookConfirmView: View {
                 if !analysis.progress.isEmpty { store.data.profile.progress[subject.rawValue] = analysis.progress }
                 store.save(); dismiss()
             }
-        }.navigationTitle("教材识别确认")
+        }.navigationTitle("教材识别确认").stridePage()
     }
 }

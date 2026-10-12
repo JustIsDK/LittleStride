@@ -54,7 +54,7 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
 /tmp/LittleStride-CoreRulesCheck
 ```
 
-当前机器没有可用模拟器运行时，因此未验证启动界面、相机、打印机、通知、分享、实际 Keychain 和 iCloud 上传恢复；不要把编译通过当作这些系统功能已经实机验收。
+已安装iOS 27运行时，并在iPhone 17e模拟器启动更新后的原生页面，检查首页浅色和深色显示。相机、打印机、通知、分享、实际Keychain与iCloud尚未完成全面验收；不要把编译和启动通过当作这些系统功能已经实机验收。
 
 ## 后续开发范围
 

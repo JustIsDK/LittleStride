@@ -13,7 +13,7 @@ struct PrintSheetView: View {
             Button("系统打印") { do { SheetRenderer.printPDF(try SheetRenderer.pdf(sheet)) } catch { self.error = error.localizedDescription } }
             Button("分享 / 保存 PDF") { do { share = SharePayload(items: [try SheetRenderer.pdf(sheet)]) } catch { self.error = error.localizedDescription } }
             NavigationLink("做完了，回录结果", destination: RecordSheetView(sheetID: sheet.id))
-        }.navigationTitle("练习单预览").toolbar { Button("关闭") { dismiss() } }
+        }.navigationTitle("练习单预览").stridePage().toolbar { Button("关闭") { dismiss() } }
         .sheet(item: $share) { SystemShare(items: $0.items) }
         .alert("打印文件生成失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好的") {} } message: { Text(error ?? "") }
     }
@@ -66,7 +66,7 @@ struct RecordSheetView: View {
                     }
                 } else { NavigationLink("本次成果与分享", destination: ResultShareView(sheetID: sheetID)) }
             }
-        }.navigationTitle("练习结果回录")
+        }.navigationTitle("练习结果回录").stridePage()
         .onAppear { if let sheet { for q in sheet.questions where drafts[q.id] == nil { drafts[q.id] = AttemptDraft() } } }
         .sheet(isPresented: $camera) { CameraPicker { photo = $0; checked = false } }
         .onChange(of: picker) { Task { if let bytes = try? await picker?.loadTransferable(type: Data.self) { photo = UIImage(data: bytes); checked = false } } }
@@ -117,7 +117,7 @@ struct ProgressView: View {
                 }
             }
             Section("最近练习成果") { ForEach(store.data.sheets.filter(\.completed).sorted { $0.createdAt > $1.createdAt }) { sheet in NavigationLink(sheet.code, destination: ResultShareView(sheetID: sheet.id)) } }
-        }.navigationTitle("学习进展")
+        }.navigationTitle("学习进展").stridePage()
     }
 }
 struct RewardsView: View {
@@ -125,13 +125,13 @@ struct RewardsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("每一步，都值得被看见。").font(.largeTitle.bold())
-                StrideCard { Text("\(store.points) 成长积分").font(.largeTitle.bold()); Text("累计 \(store.practiceCount) 次有效练习") }
+                Text("每一步，都值得被看见。").font(.title.weight(.semibold))
+                StrideCard { Text("\(store.points) 成长积分").font(.title.weight(.semibold)); Text("累计 \(store.practiceCount) 次有效练习") }
                 StrideCard { Text("🏅 十题小步").font(.title2.bold()); Text(store.practiceCount >= 10 ? "已获得" : "\(store.practiceCount) / 10 次"); SwiftUI.ProgressView(value: Double(min(store.practiceCount, 10)), total: 10); Text("计划内完成并处理订正；不要求一次全对。").font(.caption) }
                 StrideCard { Text("✨ 第一个知识点").font(.title2.bold()); Text(store.data.rewards.contains { $0.source.hasPrefix("mastery:") } ? "已获得" : "等待跨日独立掌握证据"); Text("两天独立正确，至少一次同类题，并有关键理由说明。").font(.caption) }
-                StrideCard { Text("🦊").font(.system(size: 70)); Text("小芽狐").font(.title2.bold()); Button(store.data.claimedPet ? "已领取" : "领取小伙伴") { store.data.claimedPet = true; store.save() }.buttonStyle(.borderedProminent).disabled(store.practiceCount < 10 || store.data.claimedPet); Text("不消耗积分，不需要每日喂养。休息、延期、求助不扣奖励。").font(.caption) }
-            }.padding(20)
-        }.background(StrideStyle.background).navigationTitle("成长奖励")
+                StrideCard { Text("🦊").font(.system(size: 70)); Text("小芽狐").font(.title2.bold()); Button(store.data.claimedPet ? "已领取" : "领取小伙伴") { store.data.claimedPet = true; store.save() }.buttonStyle(StrideButtonStyle()).disabled(store.practiceCount < 10 || store.data.claimedPet); Text("不消耗积分，不需要每日喂养。休息、延期、求助不扣奖励。").font(.caption) }
+            }.padding(24)
+        }.background(StrideStyle.background).navigationTitle("成长奖励").stridePage()
     }
 }
 struct ResultShareView: View {
@@ -151,7 +151,7 @@ struct ResultShareView: View {
             if showQuestions { ForEach(attempts) { a in Text(store.question(a.questionID)?.text ?? "").font(.subheadline) } }
             if showBadge && store.practiceCount >= 10 { Text("🏅 已获得「十题小步」").font(.headline) }
             Text("每一步进展，都来自真实的尝试。").font(.caption)
-        }.foregroundStyle(StrideStyle.ink).padding(28).frame(width: 330).background(Color(red: 0.96, green: 0.94, blue: 0.88), in: RoundedRectangle(cornerRadius: 24))
+        }.foregroundStyle(StrideStyle.ink).padding(28).frame(width: 330).background(StrideStyle.pale, in: RoundedRectangle(cornerRadius: 24))
     }
     var body: some View {
         ScrollView {
@@ -163,8 +163,8 @@ struct ResultShareView: View {
                 Button("分享 / 保存成果图片") {
                     let renderer = ImageRenderer(content: card); renderer.scale = 3
                     if let image = renderer.uiImage { share = SharePayload(items: [image]) }
-                }.buttonStyle(.borderedProminent).disabled(attempts.isEmpty)
-            }.padding(20)
-        }.navigationTitle("本次学习成果").sheet(item: $share) { SystemShare(items: $0.items) }
+                }.buttonStyle(StrideButtonStyle()).disabled(attempts.isEmpty)
+            }.padding(24)
+        }.navigationTitle("本次学习成果").stridePage().sheet(item: $share) { SystemShare(items: $0.items) }
     }
 }
