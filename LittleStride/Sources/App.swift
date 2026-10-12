@@ -20,14 +20,15 @@ enum StrideStyle {
             return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
         })
     }
-    static let green = color(0x24634c, 0x9bd2b2)
-    static let ink = color(0x213d32, 0xe3eee5)
-    static let background = color(0xf5f7f3, 0x161e19)
-    static let surface = color(0xffffff, 0x1e2922)
-    static let pale = color(0xe8f0e8, 0x263d31)
-    static let line = color(0xdce4da, 0x394b3e)
-    static let muted = color(0x5e6e64, 0xa9b9ad)
-    static let onAccent = color(0xffffff, 0x173426)
+    static let green = color(0x24634c, 0x82d9ac)
+    static let ink = color(0x213d32, 0xf4f4f6)
+    static let background = color(0xf5f7f3, 0x121317)
+    static let surface = color(0xffffff, 0x24262b)
+    static let pale = color(0xe8f0e8, 0x2d3036)
+    static let line = color(0xdce4da, 0x515660)
+    static let muted = color(0x5e6e64, 0xb9bec8)
+    static let onAccent = color(0xffffff, 0x10251a)
+    static let destructive = color(0xa12a2a, 0xffaaa5)
     static let warning = color(0x89531e, 0xe1bd83)
 }
 struct StrideCard<Content: View>: View {
@@ -48,47 +49,51 @@ struct Tag: View {
 }
 struct StrideButtonStyle: ButtonStyle {
     var secondary = false
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity, minHeight: 48).padding(.horizontal, 12)
-            .foregroundStyle(secondary ? StrideStyle.green : StrideStyle.onAccent)
-            .background(secondary ? StrideStyle.pale : StrideStyle.green, in: RoundedRectangle(cornerRadius: 12))
-            .opacity(enabled ? 1 : 0.45)
-            .brightness(configuration.isPressed && enabled ? -0.08 : 0)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: configuration.isPressed)
-            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in pressed && enabled }
+        StridePressSurface(label: configuration.label.font(.subheadline.weight(.semibold)), pressed: configuration.isPressed, fullWidth: true, filled: secondary ? .secondary : .primary, destructive: configuration.role == .destructive)
     }
 }
 struct StridePressStyle: ButtonStyle {
-    var fullWidth = false
+    var fullWidth = true
     func makeBody(configuration: Configuration) -> some View {
-        StridePressSurface(label: configuration.label, pressed: configuration.isPressed, fullWidth: fullWidth)
+        StridePressSurface(label: configuration.label, pressed: configuration.isPressed, fullWidth: fullWidth, destructive: configuration.role == .destructive)
     }
 }
 private struct StridePressSurface<Label: View>: View {
+    enum Fill { case primary, secondary }
     let label: Label
     let pressed: Bool
     let fullWidth: Bool
+    var filled: Fill? = nil
+    var destructive = false
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var highlighted = false
+    private var active: Bool { (pressed && enabled) || highlighted }
+    private var fill: Color {
+        if active { return filled == nil && fullWidth ? (destructive ? StrideStyle.destructive : StrideStyle.green) : StrideStyle.pale }
+        return filled == .primary && enabled ? StrideStyle.green : filled != nil ? StrideStyle.pale : .clear
+    }
+    private var foreground: Color {
+        if active { return filled == nil && fullWidth ? StrideStyle.onAccent : StrideStyle.ink }
+        return !enabled ? StrideStyle.muted : destructive ? StrideStyle.destructive : filled == .primary ? StrideStyle.onAccent : StrideStyle.green
+    }
     var body: some View {
         label
+            .multilineTextAlignment(fullWidth ? .trailing : .center)
             .padding(.horizontal, fullWidth ? 16 : 0)
-            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: fullWidth ? 56 : 44, alignment: .leading)
-            .background(fullWidth && highlighted && enabled ? StrideStyle.green.opacity(0.16) : Color.clear)
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: fullWidth ? 52 : 44, alignment: fullWidth ? .trailing : .center)
+            .foregroundStyle(foreground)
+            .background(fill, in: RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).fill(active ? StrideStyle.green.opacity(0.12) : .clear).allowsHitTesting(false) }
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(active ? StrideStyle.green : .clear, lineWidth: 2).allowsHitTesting(false) }
             .contentShape(Rectangle())
-            .brightness(!fullWidth && highlighted && enabled ? -0.08 : 0)
-            .opacity(enabled ? (!fullWidth && highlighted ? 0.85 : 1) : 0.45)
-            .scaleEffect(!fullWidth && highlighted && enabled && !reduceMotion ? 0.95 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: highlighted ? 0.06 : 0.2), value: highlighted)
+            .scaleEffect(active && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: active)
             .onChange(of: pressed) { if pressed && enabled { highlighted = true } }
             .task(id: pressed) {
                 guard !pressed else { return }
-                do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 highlighted = false
             }
             .sensoryFeedback(.impact(weight: .light), trigger: pressed) { _, down in down && enabled }
@@ -126,7 +131,7 @@ struct AnalysisStatusDialog: View {
 }
 extension View {
     func stridePage() -> some View {
-        self.scrollContentBackground(.hidden).background(StrideStyle.background)
+        self.buttonStyle(StridePressStyle()).scrollContentBackground(.hidden).background(StrideStyle.background)
             .foregroundStyle(StrideStyle.ink)
             .toolbarBackground(StrideStyle.background, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
@@ -167,7 +172,7 @@ struct RootView: View {
                 Text(title).font(.system(size: 10, weight: tab == index ? .semibold : .regular))
             }.frame(maxWidth: .infinity, minHeight: 48)
                 .foregroundStyle(tab == index ? StrideStyle.green : StrideStyle.muted)
-        }.buttonStyle(StridePressStyle()).accessibilityAddTraits(tab == index ? .isSelected : [])
+        }.buttonStyle(StridePressStyle(fullWidth: false)).accessibilityAddTraits(tab == index ? .isSelected : [])
     }
 }
 struct TodayView: View {
@@ -178,7 +183,7 @@ struct TodayView: View {
     @State private var sheet: PracticeSheet?
     private var plan: [PlanItem] { store.plan() }
     private var minutes: Int { plan.reduce(0) { $0 + $1.minutes } }
-    private var pendingCount: Int { store.data.questions.filter(\.needsVerification).count }
+    private var pendingCount: Int { store.data.questions.filter { $0.deletedAt == nil && $0.needsVerification }.count }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -225,12 +230,12 @@ struct TodayView: View {
             Spacer(minLength: 3)
             Button { appearance = colorScheme == .dark ? "light" : "dark" } label: {
                 Image(systemName: "circle.lefthalf.filled").foregroundStyle(StrideStyle.muted).frame(width: 40, height: 44)
-            }.accessibilityLabel("切换深色或浅色外观")
+            }.buttonStyle(StridePressStyle(fullWidth: false)).accessibilityLabel("切换深色或浅色外观")
             NavigationLink(destination: ProfileView()) {
                 Text(String(store.data.profile.nickname.prefix(2))).font(.caption.weight(.semibold))
                     .foregroundStyle(StrideStyle.green).frame(width: 40, height: 40)
                     .background(StrideStyle.pale, in: Circle())
-            }.accessibilityLabel("孩子档案")
+            }.buttonStyle(StridePressStyle(fullWidth: false)).accessibilityLabel("孩子档案")
         }.padding(.bottom, 6)
     }
     private var introduction: some View {
@@ -260,13 +265,13 @@ struct TodayView: View {
                 if plan.isEmpty {
                     NavigationLink("查看学习进展", destination: ProgressView()).buttonStyle(StrideButtonStyle())
                 } else {
-                    Button("预览并打印练习单") { Task { var created: PracticeSheet?; if await store.confirm({ created = store.makeSheet(plan.map(\.question)) }) { sheet = created } } }
+                    Button("合并打印今日全部 \(plan.count) 题") { Task { var created: PracticeSheet?; if await store.confirm({ created = store.makeSheet(plan.map(\.question)) }) { sheet = created } } }
                         .buttonStyle(StrideButtonStyle())
                 }
                 NavigationLink(destination: CaptureView(initialMode: "练习回录")) {
                     Image(systemName: "camera").font(.title3).foregroundStyle(StrideStyle.green)
                         .frame(width: 48, height: 48).background(StrideStyle.surface, in: RoundedRectangle(cornerRadius: 12))
-                }.accessibilityLabel("拍照回录练习结果")
+                }.buttonStyle(StridePressStyle(fullWidth: false)).accessibilityLabel("拍照回录练习结果")
             }
         }.padding(22).background(StrideStyle.pale, in: RoundedRectangle(cornerRadius: 22))
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(StrideStyle.line, lineWidth: 1))
@@ -412,8 +417,10 @@ struct LibraryView: View {
     @Environment(LearningStore.self) private var store
     @State private var filter: String
     @State private var search = ""
+    @State private var editing = false
+    @State private var deleting: Question?
     init(initialFilter: String = "全部") { _filter = State(initialValue: initialFilter) }
-    private var questions: [Question] { store.data.questions.filter { q in (filter == "全部" || (filter == "待核实" ? q.needsVerification : q.subject.rawValue == filter)) && (search.isEmpty || q.text.localizedCaseInsensitiveContains(search)) } }
+    private var questions: [Question] { store.data.questions.filter { q in q.deletedAt == nil && (filter == "全部" || (filter == "待核实" ? q.needsVerification : q.subject.rawValue == filter)) && (search.isEmpty || q.text.localizedCaseInsensitiveContains(search)) } }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -433,7 +440,7 @@ struct LibraryView: View {
                                     .foregroundStyle(filter == value ? StrideStyle.ink : StrideStyle.muted)
                                     .padding(.horizontal, 14).frame(minHeight: 44)
                                     .background(filter == value ? StrideStyle.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(StridePressStyle()).accessibilityAddTraits(filter == value ? .isSelected : [])
+                            }.buttonStyle(StridePressStyle(fullWidth: false)).accessibilityAddTraits(filter == value ? .isSelected : [])
                         }
                     }.padding(4)
                 }.background(StrideStyle.pale, in: RoundedRectangle(cornerRadius: 12))
@@ -457,14 +464,34 @@ struct LibraryView: View {
                             }
                         }
                     }.buttonStyle(StridePressStyle())
+                    .contextMenu {
+                        NavigationLink("编辑题目", destination: QuestionEditorView(existing: q))
+                        Button("删除题目", role: .destructive) { deleting = q }
+                    }
+                    if editing {
+                        HStack {
+                            NavigationLink("编辑题目", destination: QuestionEditorView(existing: q))
+                            Button("删除题目", role: .destructive) { deleting = q }
+                        }
+                    }
                 }
             }.padding(24)
         }.navigationTitle("错题库").stridePage()
-        .toolbar { NavigationLink(destination: QuestionEditorView()) { Image(systemName: "plus") }.accessibilityLabel("添加题目") }
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button(editing ? "完成" : "编辑") { editing.toggle() }.buttonStyle(StridePressStyle(fullWidth: false))
+                NavigationLink("添加", destination: QuestionEditorView()).buttonStyle(StridePressStyle(fullWidth: false)).accessibilityLabel("添加题目")
+            }
+        }
+        .alert("删除这道题？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("删除题目", role: .destructive) { if let q = deleting { Task { _ = await store.deleteQuestion(q.id) } }; deleting = nil }
+            Button("取消", role: .cancel) { deleting = nil }
+        } message: { Text("从错题库和后续计划中移除。已打印的练习单、历史作答与积分会保留。") }
     }
 }
 struct QuestionDetailView: View {
     @Environment(LearningStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     let id: UUID
     @State private var busy = false
     @State private var generatedQuestionID: UUID?
@@ -472,6 +499,7 @@ struct QuestionDetailView: View {
     @State private var generateError: String?
     @State private var generateStarted = Date()
     @State private var generateTask: Task<Void, Never>?
+    @State private var confirmDelete = false
     var body: some View {
         ScrollView {
             if let q = store.question(id) {
@@ -486,6 +514,7 @@ struct QuestionDetailView: View {
                         Task { if store.isSelectedToday(q.id) { await store.removeFromToday(q.id) } else { _ = await store.addToToday(q.id) } }
                     }.buttonStyle(StrideButtonStyle(secondary: true)).disabled(busy || q.needsVerification || !["收录", "生成练习"].contains(q.screening))
                     Text("生成的新题会保存为待核实，核对后再安排练习。").font(.caption).foregroundStyle(.secondary)
+                    Button("删除题目", role: .destructive) { confirmDelete = true }.disabled(busy || store.writing || q.deletedAt != nil)
                     let attempts = store.data.attempts.filter { $0.questionID == id }.sorted { $0.date > $1.date }
                     Text("作答历程").font(.headline)
                     ForEach(attempts) { a in StrideCard { Text(a.date.formatted(date: .abbreviated, time: .shortened)); Text("\(a.result) · \(a.help)"); Text(a.note); Text("理由说明：\(a.reason)").font(.caption) } }
@@ -493,6 +522,10 @@ struct QuestionDetailView: View {
             }
         }.background(StrideStyle.background).navigationTitle("题目详情").stridePage()
         .navigationDestination(item: $generatedQuestionID) { QuestionDetailView(id: $0) }
+        .alert("删除这道题？", isPresented: $confirmDelete) {
+            Button("删除题目", role: .destructive) { Task { if await store.deleteQuestion(id) { dismiss() } } }
+            Button("取消", role: .cancel) {}
+        } message: { Text("从错题库和后续计划中移除，保留已打印练习单、历史作答与积分。") }
         .overlay {
             if generateDialog {
                 AnalysisStatusDialog(busy: busy, success: generateError == nil, message: generateError ?? "同类题已生成，正在打开新题目详情。", started: generateStarted, cancel: { generateTask?.cancel(); generateDialog = false }, close: { generateDialog = false })
@@ -537,7 +570,7 @@ struct TodaySelectionView: View {
                 }
             }
             Section("选择错题") {
-                ForEach(store.data.questions.filter { !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) && (search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)) }) { q in
+                ForEach(store.data.questions.filter { $0.deletedAt == nil && !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) && (search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)) }) { q in
                     Button { Task { if store.isSelectedToday(q.id) { await store.removeFromToday(q.id) } else { _ = await store.addToToday(q.id) } } } label: {
                         HStack { Text(q.text).lineLimit(3); Spacer(); Image(systemName: store.isSelectedToday(q.id) ? "checkmark.circle.fill" : "plus.circle") }
                     }

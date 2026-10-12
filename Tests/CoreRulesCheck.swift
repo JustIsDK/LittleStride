@@ -77,7 +77,7 @@ import Foundation
         customStore.data.dailyMinutes = 2
         let noTime = await customStore.addToToday(chosen.id)
         precondition(!noTime && customStore.plan().isEmpty)
-        customStore.data.dailyMinutes = 15
+        customStore.data.dailyMinutes = 10
         let photo = try customStore.addPhoto(Data([1, 2, 3]))
         chosen.imageID = photo; customStore.data.questions[0] = chosen
         try await customStore.persist()
@@ -89,6 +89,31 @@ import Foundation
         precondition(customStore.photoData(photo) == nil && !customStore.data.photos.contains { $0.id == photo })
         let cleanedReload = LearningStore(directory: directory.appendingPathComponent("manual"))
         precondition(cleanedReload.data.questions[0].imageID == nil)
+        let chosenAgain = await customStore.addToToday(chosen.id)
+        precondition(chosenAgain)
+        let historicalSheet = customStore.makeSheet([chosen])
+        let historicalAttempt = Attempt(questionID: chosen.id, sheetID: historicalSheet.id, answer: "1", result: "正确", help: "独立", reason: "能", corrected: false)
+        customStore.record([historicalAttempt], sheetID: historicalSheet.id)
+        customStore.data.questions[2].parentID = chosen.id
+        let pointsBeforeDelete = customStore.points
+        let deleted = await customStore.deleteQuestion(chosen.id)
+        precondition(deleted && customStore.question(chosen.id)?.deletedAt != nil)
+        precondition(!customStore.isSelectedToday(chosen.id) && customStore.data.deferred[chosen.id.uuidString] == nil)
+        precondition(customStore.data.attempts.count == 1 && customStore.points == pointsBeforeDelete)
+        precondition(customStore.data.sheets.last?.questions.first?.deletedAt == nil)
+        precondition(customStore.data.questions[2].parentID == chosen.id)
+        let cannotSelectDeleted = await customStore.addToToday(chosen.id)
+        precondition(!cannotSelectDeleted)
+        let portableDeleted = try await customStore.backupBytes()
+        let portableRoundTrip = try JSONDecoder().decode(AppData.self, from: portableDeleted)
+        precondition(portableRoundTrip.questions.first { $0.id == chosen.id }?.deletedAt != nil)
+        let sparePhoto = try customStore.addPhoto(Data([4, 5, 6]))
+        customStore.data.questions[2].imageID = sparePhoto
+        let deletedExtra = await customStore.deleteQuestion(extra.id)
+        precondition(deletedExtra && customStore.photoData(sparePhoto) == nil)
+        let deletionReload = LearningStore(directory: directory.appendingPathComponent("manual"))
+        precondition(deletionReload.question(extra.id)?.deletedAt != nil)
+        print("PASS: question deletion, preserved sheets/attempts/points/ancestry, selection cleanup, backup restore, photo cleanup, persisted deletion")
         print("PASS: manual selection, overdue override, duplicate selection, verification guard, daily expiry, persisted selections, daily subject cap, referenced photo protection, collected photo deletion")
         print("PASS: plan, deferral, reward idempotency, cross-day mastery, JSON round trip, persisted reload, validated restore, recovery snapshot")
     }

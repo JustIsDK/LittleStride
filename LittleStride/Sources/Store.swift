@@ -121,7 +121,7 @@ import Observation
         let completed = Set(data.attempts.filter { calendar.isDate($0.date, inSameDayAs: date) }.map(\.questionID))
         let selected = Set((data.todaySelections ?? [:]).filter { calendar.isDate($0.value, inSameDayAs: date) }.keys)
         let candidates = data.questions.filter { q in
-            !q.needsVerification && ["收录", "生成练习"].contains(q.screening) && data.subjects.contains(q.subject)
+            q.deletedAt == nil && !q.needsVerification && ["收录", "生成练习"].contains(q.screening) && data.subjects.contains(q.subject)
             && !completed.contains(q.id)
             && (selected.contains(q.id.uuidString) || (data.deferred[q.id.uuidString].map { calendar.startOfDay(for: $0) <= calendar.startOfDay(for: date) } ?? true))
             && (selected.contains(q.id.uuidString) || (weakness(q.weaknessID).map { $0.status != "暂时退出" && calendar.startOfDay(for: $0.nextDate) <= calendar.startOfDay(for: date) } ?? true))
@@ -154,7 +154,7 @@ import Observation
         data.todaySelections?[id.uuidString].map { Calendar.current.isDate($0, inSameDayAs: date) } ?? false
     }
     func addToToday(_ id: UUID, on date: Date = Date()) async -> Bool {
-        guard let q = question(id), !q.needsVerification, ["收录", "生成练习"].contains(q.screening) else {
+        guard let q = question(id), q.deletedAt == nil, !q.needsVerification, ["收录", "生成练习"].contains(q.screening) else {
             error = "请先核实题目并选择收录或生成练习。"; return false
         }
         guard data.subjects.contains(q.subject) else { error = "请先在学科与题量中开启\(q.subject.rawValue)。"; return false }
@@ -175,7 +175,7 @@ import Observation
         return false
     }
     func addKnowledgeToToday(_ weaknessID: UUID) async {
-        let candidates = data.questions.filter { $0.weaknessID == weaknessID && !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) }
+        let candidates = data.questions.filter { $0.deletedAt == nil && $0.weaknessID == weaknessID && !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) }
             .sorted { $0.createdAt > $1.createdAt }
         guard let q = candidates.first(where: { q in
             !data.attempts.contains { $0.questionID == q.id && Calendar.current.isDateInToday($0.date) }
@@ -184,6 +184,22 @@ import Observation
     }
     func removeFromToday(_ id: UUID) async {
         if await confirm({ data.todaySelections?.removeValue(forKey: id.uuidString) }) { notice = "已取消指定；到期题仍可能按自动计划出现。" }
+    }
+    func deleteQuestion(_ id: UUID) async -> Bool {
+        guard let index = data.questions.firstIndex(where: { $0.id == id && $0.deletedAt == nil }) else { return false }
+        let imageID = data.questions[index].imageID
+        // Keep the record for printed sheets, attempts and generated-question ancestry.
+        guard await confirm({
+            data.questions[index].deletedAt = Date()
+            data.questions[index].imageID = nil
+            data.todaySelections?.removeValue(forKey: id.uuidString)
+            data.deferred.removeValue(forKey: id.uuidString)
+        }) else { return false }
+        if let imageID {
+            do { try await discardCollectedPhoto(imageID) }
+            catch let cleanupError { self.error = "题目已删除，原图清理失败：" + cleanupError.localizedDescription }
+        }
+        return true
     }
     func deferQuestions(_ ids: [UUID], days: Int) async {
         let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()

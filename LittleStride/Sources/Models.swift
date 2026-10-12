@@ -55,6 +55,7 @@ struct Question: Codable, Identifiable {
     var needsVerification = true
     var screening = "待核实"
     var createdAt = Date()
+    var deletedAt: Date?
 }
 struct Weakness: Codable, Identifiable {
     var id = UUID()

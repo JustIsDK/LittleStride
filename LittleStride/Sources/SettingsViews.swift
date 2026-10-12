@@ -191,8 +191,8 @@ struct AISettingsView: View {
             if connectionMode == "key" { Section("保存与检测") {
                 Button { busy = true; Task { _ = await save(); busy = false } } label: {
                     HStack {
-                        Label(saveFeedback ? "已保存" : "保存连接配置", systemImage: saveFeedback ? "checkmark.circle.fill" : "square.and.arrow.down")
                         Spacer()
+                        Label(saveFeedback ? "已保存" : "保存连接配置", systemImage: saveFeedback ? "checkmark.circle.fill" : "square.and.arrow.down")
                     }
                 }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy)
                 Button {
@@ -201,10 +201,10 @@ struct AISettingsView: View {
                     Task { await test() }
                 } label: {
                     HStack {
+                        Spacer()
                         if busy { SwiftUI.ProgressView().tint(StrideStyle.green) }
                         else { Image(systemName: "network") }
                         Text(busy ? "正在检测连接…" : "检测文本与结构化输出")
-                        Spacer()
                     }
                 }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy)
                 Text(testResult).font(.caption).textSelection(.enabled)

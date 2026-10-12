@@ -85,6 +85,14 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/AIService.swift Li
 - 掌握只采用最近失败或新增原题之后的成功证据；重复掌握保留原奖励且不重复发放。计划扣除当天已完成的各科题量。编辑重新按学科和知识点建立关联，清空可解除关联。长题 PDF 使用 CoreText 跨页排版。
 - 本次 generic iOS Simulator Debug 编译通过，未新增或运行测试。既有规则检查仅更新 async 调用及确认落盘所需等待。真实 AI、真机相机、迁移/恢复、缓存清理、PDF 打印和 iCloud 行为尚待实机验收。
 
+## 2026-10-12 按钮、错题库与合并打印
+
+- 操作按钮统一右对齐并扩大为整行点击区域，按下时有明显底色、边框、轻微缩放和触感反馈；AI 设置的保存与检测按钮也采用同一反馈。
+- 夜间模式改为中性深灰背景和浅色文字，绿色只用于重点、选中和成功状态，避免整页偏绿导致对比度不足。
+- 错题库可添加、编辑和删除。删除采用确认弹窗，题目从题库与后续计划移除，但已打印练习单、历史作答、积分和题目关联保留；无引用原图会清理。
+- 首页将当天计划中的所有学科题目合并为一份习题集，连续排版并在空间不足时分页，可整份打印或保存 PDF。
+- 新增模拟器 UI 测试覆盖整行空白区域点击和 AI 设置保存按钮；规则回归与 UI 测试均通过。
+
 ## CloudKit 共享档案
 
 工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录（默认不强制开启签名 capability，以便个人开发团队仍能编译）：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要使用支持 iCloud capability 的 Apple Developer 付费团队，在 Apple Developer / CloudKit Console 创建同名 Container，然后在 Xcode 的 Signing & Capabilities 添加 iCloud/CloudKit，并设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。个人开发团队不支持该 capability，本地题库仍可使用；CloudKit 和 App 直接写入 iCloud Drive 的能力均需正确签名与权限，不能保证个人团队可用。

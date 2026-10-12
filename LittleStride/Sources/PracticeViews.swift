@@ -8,12 +8,12 @@ struct PrintSheetView: View {
     @State private var error: String?
     var body: some View {
         List {
-            Section { Text(sheet.code).font(.headline); Text("孩子版不包含答案、错因和分析提示。") }
-            ForEach(Array(sheet.questions.enumerated()), id: \.element.id) { i, q in Text("\(i + 1). \(q.text)").padding(.vertical, 15) }
-            Button("系统打印") { do { SheetRenderer.printPDF(try SheetRenderer.pdf(sheet)) } catch { self.error = error.localizedDescription } }
+            Section { Text(sheet.code).font(.headline); Text("\(Set(sheet.questions.map(\.subject)).count) 个学科 · 共 \(sheet.questions.count) 题，合并排版，空间用完再分页。"); Text("孩子版不包含答案、错因和分析提示。") }
+            ForEach(Array(sheet.questions.enumerated()), id: \.element.id) { i, q in Text("\(i + 1). [\(q.subject.rawValue)] \(q.text)").padding(.vertical, 15) }
+            Button("打印整份习题集") { do { SheetRenderer.printPDF(try SheetRenderer.pdf(sheet)) } catch { self.error = error.localizedDescription } }
             Button("分享 / 保存 PDF") { do { share = SharePayload(items: [try SheetRenderer.pdf(sheet)]) } catch { self.error = error.localizedDescription } }
             NavigationLink("做完了，回录结果", destination: RecordSheetView(sheetID: sheet.id))
-        }.navigationTitle("练习单预览").stridePage().toolbar { Button("关闭") { dismiss() } }
+        }.navigationTitle("今日习题集预览").stridePage().toolbar { Button("关闭") { dismiss() }.buttonStyle(StridePressStyle(fullWidth: false)) }
         .sheet(item: $share) { SystemShare(items: $0.items) }
         .alert("打印文件生成失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好的") {} } message: { Text(error ?? "") }
     }
@@ -224,7 +224,7 @@ struct ProgressView: View {
                     Text("已记录 \(history.count) 次作答，独立正确 \(history.filter { $0.help == "独立" && $0.result == "正确" }.count) 次")
                     Button("今天练这个知识点") { Task { await store.addKnowledgeToToday(w.id) } }
                     Text("下次复习：\(w.nextDate.formatted(date: .abbreviated, time: .omitted))").font(.caption)
-                    ForEach(qs.prefix(2)) { q in NavigationLink(q.text, destination: QuestionDetailView(id: q.id)) }
+                    ForEach(qs.filter { $0.deletedAt == nil }.prefix(2)) { q in NavigationLink(q.text, destination: QuestionDetailView(id: q.id)) }
                 }
             }
             Section("最近练习成果") { ForEach(store.data.sheets.filter(\.completed).sorted { $0.createdAt > $1.createdAt }) { sheet in NavigationLink(sheet.code, destination: ResultShareView(sheetID: sheet.id)) } }
