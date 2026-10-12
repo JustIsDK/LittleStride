@@ -7,13 +7,37 @@ enum Subject: String, Codable, CaseIterable, Identifiable {
 }
 struct ChildProfile: Codable {
     var nickname = "小朋友"
-    var age = ""
+    var age = "" // 仅兼容旧备份，不作为当前年龄或出生日期使用。
+    var birthDate: String? // 日期本身，YYYY-MM-DD；不含时区。
     var grade = "三年级"
     var region = "上海"
     var term = "上学期"
     var textbooks: [String: String] = [:]
     var progress: [String: String] = [:]
     var observations: [String: String] = [:]
+
+    static func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+    var birthDateValue: Date? {
+        guard let birthDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard let date = formatter.date(from: birthDate), Self.dateString(date) == birthDate else { return nil }
+        return date
+    }
+    var currentAge: Int? {
+        let calendar = Calendar(identifier: .gregorian)
+        guard let date = birthDateValue, date <= Date() else { return nil }
+        return calendar.dateComponents([.year], from: date, to: calendar.startOfDay(for: Date())).year
+    }
 }
 struct Question: Codable, Identifiable {
     var id = UUID()

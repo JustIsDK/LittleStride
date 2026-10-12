@@ -159,7 +159,7 @@ struct ResultShareView: View {
                 card
                 Toggle("展示题目内容", isOn: $showQuestions)
                 Toggle("展示已获得徽章", isOn: $showBadge)
-                Text("分享仅展示昵称和本次成果，不带年龄、地区、能力短板或原始照片。").font(.caption).foregroundStyle(.secondary)
+                Text("分享仅展示昵称和本次成果，不带出生日期、年龄、地区、能力短板或原始照片。").font(.caption).foregroundStyle(.secondary)
                 Button("分享 / 保存成果图片") {
                     let renderer = ImageRenderer(content: card); renderer.scale = 3
                     if let image = renderer.uiImage { share = SharePayload(items: [image]) }

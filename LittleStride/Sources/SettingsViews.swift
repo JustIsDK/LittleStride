@@ -3,12 +3,33 @@ import UniformTypeIdentifiers
 
 struct ProfileView: View {
     @Environment(LearningStore.self) private var store
+    @State private var editingBirthDate = false
+    @State private var draftBirthDate = Date()
     var body: some View {
         @Bindable var store = store
         Form {
             Section("基本信息") {
                 TextField("昵称", text: $store.data.profile.nickname)
-                TextField("年龄（可选）", text: $store.data.profile.age).keyboardType(.numberPad)
+                Button {
+                    draftBirthDate = store.data.profile.birthDateValue ?? Date()
+                    editingBirthDate = true
+                } label: {
+                    HStack {
+                        Text("出生日期（可选）").foregroundStyle(.primary)
+                        Spacer()
+                        Text(store.data.profile.birthDate ?? "填写出生日期").foregroundStyle(.secondary)
+                    }
+                }
+                if let age = store.data.profile.currentAge {
+                    LabeledContent("当前年龄", value: "\(age) 周岁")
+                }
+                if store.data.profile.birthDate != nil {
+                    Button("清除出生日期", role: .destructive) {
+                        store.data.profile.birthDate = nil
+                        store.data.profile.age = ""
+                        store.save()
+                    }
+                }
                 Picker("年级", selection: $store.data.profile.grade) { ForEach(["一年级", "二年级", "三年级", "四年级", "五年级", "六年级"], id: \.self) { Text($0) } }
                 TextField("学习地区", text: $store.data.profile.region)
                 Picker("学期", selection: $store.data.profile.term) { Text("上学期"); Text("下学期") }
@@ -28,6 +49,32 @@ struct ProfileView: View {
                 NavigationLink("提醒与计划设置", destination: SettingsView())
             }
         }.navigationTitle("孩子档案").stridePage().onDisappear { store.save() }
+        .sheet(isPresented: $editingBirthDate) {
+            NavigationStack {
+                Form {
+                    DatePicker("出生日期", selection: $draftBirthDate, in: ...Date(), displayedComponents: .date)
+                        .datePickerStyle(.wheel)
+                        .environment(\.calendar, Calendar(identifier: .gregorian))
+                    Text("年龄根据出生日期自动计算，无需每年修改。出生日期不会出现在成果分享中。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .navigationTitle("出生日期")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { editingBirthDate = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("保存") {
+                            store.data.profile.birthDate = ChildProfile.dateString(draftBirthDate)
+                            store.data.profile.age = ""
+                            store.save()
+                            editingBirthDate = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
     }
 }
 struct AssessmentView: View {

@@ -115,6 +115,9 @@ import Observation
     func restore(_ bytes: Data) throws {
         let incoming = try JSONDecoder().decode(AppData.self, from: bytes)
         guard incoming.schemaVersion == 1 else { throw StoreFailure.invalidVersion }
+        guard incoming.profile.birthDate == nil || incoming.profile.currentAge != nil else {
+            throw StoreFailure.invalidRelations
+        }
         let ids = Set(incoming.questions.map(\.id))
         let weaknessIDs = Set(incoming.weaknesses.map(\.id))
         let photoIDs = Set(incoming.photos.map(\.id))
