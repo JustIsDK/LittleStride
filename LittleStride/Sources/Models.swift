@@ -90,11 +90,55 @@ struct RewardEvent: Codable, Identifiable {
     var date = Date()
 }
 struct AIConfiguration: Codable {
+    var provider: String?
+    var credentialScope: String?
+    var reasoningEffort: String?
     var baseURL = ""
     var model = ""
     var api = "Responses"
     var authHeader = "Authorization"
     var bearer = true
+    var keyAccount: String { "api-key:" + baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+}
+enum AIProvider: String, CaseIterable, Identifiable {
+    case custom, openai, claude, deepseek, qwen, glm
+    var id: String { rawValue }
+    var name: String {
+        switch self { case .custom: "自定义 / 中转服务"; case .openai: "OpenAI · GPT"; case .claude: "Anthropic · Claude"; case .deepseek: "DeepSeek"; case .qwen: "通义千问"; case .glm: "智谱 · GLM" }
+    }
+    var baseURL: String {
+        switch self {
+        case .custom: ""
+        case .openai: "https://api.openai.com/v1"
+        case .claude: "https://api.anthropic.com/v1"
+        case .deepseek: "https://api.deepseek.com/v1"
+        case .qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        case .glm: "https://open.bigmodel.cn/api/paas/v4"
+        }
+    }
+    var api: String { self == .claude ? "Anthropic Messages" : self == .openai ? "Responses" : "Chat Completions" }
+    var consoleURL: URL? {
+        guard self != .custom else { return nil }
+        let address = switch self {
+        case .custom: ""
+        case .openai: "https://platform.openai.com/api-keys"
+        case .claude: "https://platform.claude.com/settings/keys"
+        case .deepseek: "https://platform.deepseek.com/api_keys"
+        case .qwen: "https://bailian.console.aliyun.com/"
+        case .glm: "https://open.bigmodel.cn/"
+        }
+        return URL(string: address)
+    }
+    var guide: String {
+        switch self {
+        case .custom: "向服务商获取完整 Base URL、接口协议、模型 ID 和 API Key。照抄路径前缀（例如 /v1），不要复制 /responses 或 /chat/completions。Codex 配置的 base_url 对应服务地址，model 对应模型 ID，wire_api = responses 对应 Responses。"
+        case .openai: "登录 OpenAI API 平台，在 API Keys 创建密钥，并检查项目额度和模型访问权限。模型 ID 从平台文档或模型列表复制。ChatGPT 订阅与 API 用量分开管理。"
+        case .claude: "登录 Claude 开发者控制台，在 API Keys 创建密钥。模型 ID 从控制台的 API 文档复制。官方接口使用 Anthropic Messages、x-api-key 请求头，不加 Bearer；Claude 中转商可能提供不同协议。"
+        case .deepseek: "登录 DeepSeek 开放平台，在 API Keys 创建密钥，复制官方模型 ID。文本连接通过不代表可识别照片；请先确认所选模型和接口支持图片输入，不支持时改用有视觉能力的服务。"
+        case .qwen: "登录阿里云百炼，开通模型服务并创建 API Key。从模型广场复制有视觉能力的模型 ID。此预设为中国内地兼容接口；其他地域须使用相应地域的地址与密钥。"
+        case .glm: "登录智谱开放平台，在 API Keys 创建密钥。从模型文档复制模型 ID，拍照分析需选择支持视觉输入的模型。"
+        }
+    }
 }
 struct PhotoAsset: Codable, Identifiable {
     var id = UUID()

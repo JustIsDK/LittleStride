@@ -5,7 +5,7 @@ import SwiftUI
     @AppStorage("appearance") private var appearance = "system"
     var body: some Scene {
         WindowGroup {
-            RootView().environment(store).tint(StrideStyle.green).preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
+            RootView().environment(store).tint(StrideStyle.green).buttonStyle(StridePressStyle()).preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         }
     }
 }
@@ -52,8 +52,55 @@ struct StrideButtonStyle: ButtonStyle {
             .foregroundStyle(secondary ? StrideStyle.green : StrideStyle.onAccent)
             .background(secondary ? StrideStyle.pale : StrideStyle.green, in: RoundedRectangle(cornerRadius: 12))
             .opacity(enabled ? 1 : 0.45)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .brightness(configuration.isPressed && enabled ? -0.08 : 0)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: configuration.isPressed)
+            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in pressed && enabled }
+    }
+}
+struct StridePressStyle: ButtonStyle {
+    var fullWidth = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+            .brightness(configuration.isPressed && enabled ? -0.08 : 0)
+            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: configuration.isPressed)
+            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in pressed && enabled }
+    }
+}
+struct AnalysisStatusDialog: View {
+    let busy: Bool
+    let success: Bool
+    let message: String
+    let started: Date
+    let cancel: () -> Void
+    let close: () -> Void
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea().contentShape(Rectangle())
+            VStack(spacing: 18) {
+                if busy { SwiftUI.ProgressView().controlSize(.large).tint(StrideStyle.green) }
+                else { Image(systemName: success ? "checkmark.circle.fill" : "exclamationmark.circle.fill").font(.system(size: 44)).foregroundStyle(success ? StrideStyle.green : StrideStyle.warning) }
+                Text(busy ? "正在分析照片" : success ? "分析成功" : "分析失败").font(.title3.weight(.semibold))
+                Text(message).font(.subheadline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                if busy {
+                    TimelineView(.periodic(from: started, by: 1)) { context in
+                        Text("已等待 \(max(0, Int(context.date.timeIntervalSince(started)))) 秒").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("取消分析", action: cancel).buttonStyle(StrideButtonStyle(secondary: true))
+                } else if success {
+                    Text("2 秒后自动展示结果，请核对后保存。").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button("返回修改或重试", action: close).buttonStyle(StrideButtonStyle())
+                }
+            }.padding(26).frame(maxWidth: 340).background(StrideStyle.surface, in: RoundedRectangle(cornerRadius: 24)).padding(24)
+                .accessibilityAddTraits(.isModal)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 extension View {
@@ -98,7 +145,7 @@ struct RootView: View {
                 Text(title).font(.system(size: 10, weight: tab == index ? .semibold : .regular))
             }.frame(maxWidth: .infinity, minHeight: 48)
                 .foregroundStyle(tab == index ? StrideStyle.green : StrideStyle.muted)
-        }.buttonStyle(.plain).accessibilityAddTraits(tab == index ? .isSelected : [])
+        }.buttonStyle(StridePressStyle()).accessibilityAddTraits(tab == index ? .isSelected : [])
     }
 }
 struct TodayView: View {
@@ -266,7 +313,7 @@ struct TodayView: View {
             }.padding(.vertical, 20)
                 .overlay(alignment: .top) { Rectangle().fill(StrideStyle.line).frame(height: 1) }
                 .overlay(alignment: .bottom) { Rectangle().fill(StrideStyle.line).frame(height: 1) }
-        }.buttonStyle(.plain)
+        }.buttonStyle(StridePressStyle())
     }
     private var pendingMaterials: some View {
         NavigationLink(destination: LibraryView(initialFilter: "待核实")) {
@@ -281,7 +328,7 @@ struct TodayView: View {
             }.padding(17).foregroundStyle(StrideStyle.ink)
                 .background(StrideStyle.surface, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(StrideStyle.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+        }.buttonStyle(StridePressStyle())
     }
     private var utilities: some View {
         VStack(spacing: 0) {
@@ -294,7 +341,7 @@ struct TodayView: View {
         NavigationLink(destination: destination) {
             HStack { Text(title).foregroundStyle(StrideStyle.green); Spacer(); Text(detail).foregroundStyle(StrideStyle.muted) }
                 .font(.caption).frame(minHeight: 48).overlay(alignment: .bottom) { Rectangle().fill(StrideStyle.line).frame(height: 1) }
-        }.buttonStyle(.plain)
+        }.buttonStyle(StridePressStyle())
     }
 }
 struct TodayQuestionsView: View {
@@ -309,7 +356,7 @@ struct TodayQuestionsView: View {
                             Text(item.question.text).foregroundStyle(StrideStyle.ink)
                             Text(store.weakness(item.question.weaknessID)?.title ?? "校内基础复习").font(.caption).foregroundStyle(StrideStyle.muted)
                         }
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(StridePressStyle())
                 }
             }.padding(24)
         }.navigationTitle("今日选题依据").stridePage().stridePage()
@@ -363,7 +410,7 @@ struct LibraryView: View {
                                     .foregroundStyle(filter == value ? StrideStyle.ink : StrideStyle.muted)
                                     .padding(.horizontal, 14).frame(minHeight: 44)
                                     .background(filter == value ? StrideStyle.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain).accessibilityAddTraits(filter == value ? .isSelected : [])
+                            }.buttonStyle(StridePressStyle()).accessibilityAddTraits(filter == value ? .isSelected : [])
                         }
                     }.padding(4)
                 }.background(StrideStyle.pale, in: RoundedRectangle(cornerRadius: 12))
@@ -386,7 +433,7 @@ struct LibraryView: View {
                                 Text(w.status).font(.caption).foregroundStyle(StrideStyle.green)
                             }
                         }
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(StridePressStyle())
                 }
             }.padding(24)
         }.navigationTitle("错题库").stridePage()

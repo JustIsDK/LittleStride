@@ -1,23 +1,132 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 import UserNotifications
 import UniformTypeIdentifiers
 
 struct CameraPicker: UIViewControllerRepresentable {
     var onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let vc = UIImagePickerController(); vc.sourceType = .camera; vc.delegate = context.coordinator; return vc
+    func makeUIViewController(context: Context) -> CaptureCameraController {
+        let controller = CaptureCameraController()
+        controller.onImage = { image in dismiss(); onImage(image) }
+        controller.onCancel = { dismiss() }
+        return controller
     }
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let parent: CameraPicker
-        init(_ parent: CameraPicker) { self.parent = parent }
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }; parent.dismiss()
+    func updateUIViewController(_ uiViewController: CaptureCameraController, context: Context) {}
+}
+// A lightweight capture surface: session setup runs off the UI thread, and the
+// captured image goes directly to the app preview without a second confirmation screen.
+final class CaptureCameraController: UIViewController, AVCapturePhotoCaptureDelegate {
+    var onImage: ((UIImage) -> Void)?
+    var onCancel: (() -> Void)?
+    private let session = AVCaptureSession()
+    private let output = AVCapturePhotoOutput()
+    private let sessionQueue = DispatchQueue(label: "LittleStride.camera", qos: .userInitiated)
+    private var preview: AVCaptureVideoPreviewLayer?
+    private let shutter = UIButton(type: .custom)
+    private let status = UILabel()
+    private var visible = true
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        let preview = AVCaptureVideoPreviewLayer(session: session)
+        preview.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(preview); self.preview = preview
+        let close = UIButton(type: .system)
+        close.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
+        close.tintColor = .white; close.accessibilityLabel = "关闭相机"
+        close.addTarget(self, action: #selector(cancel), for: .touchUpInside)
+        shutter.backgroundColor = .white; shutter.layer.cornerRadius = 36
+        shutter.layer.borderWidth = 5; shutter.layer.borderColor = UIColor.lightGray.cgColor
+        shutter.accessibilityLabel = "拍摄作业照片"; shutter.isEnabled = false
+        shutter.addTarget(self, action: #selector(capture), for: .touchUpInside)
+        status.text = "正在打开相机…"; status.textColor = .white
+        status.textAlignment = .center; status.font = .preferredFont(forTextStyle: .subheadline)
+        status.numberOfLines = 0
+        for item in [close, shutter, status] { item.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(item) }
+        NSLayoutConstraint.activate([
+            close.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            close.widthAnchor.constraint(equalToConstant: 44), close.heightAnchor.constraint(equalToConstant: 44),
+            shutter.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            shutter.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            shutter.widthAnchor.constraint(equalToConstant: 72), shutter.heightAnchor.constraint(equalToConstant: 72),
+            status.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            status.bottomAnchor.constraint(equalTo: shutter.topAnchor, constant: -20),
+            status.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -40)
+        ])
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: configureSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] allowed in
+                DispatchQueue.main.async { if allowed { self?.configureSession() } else { self?.showFailure("请在系统设置中允许 LittleStride 使用相机。") } }
+            }
+        default: showFailure("请在系统设置中允许 LittleStride 使用相机，也可以从相册选择照片。")
         }
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews(); preview?.frame = view.bounds
+        if let connection = preview?.connection, connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated); visible = false
+        let session = session
+        sessionQueue.async { if session.isRunning { session.stopRunning() } }
+    }
+    private func configureSession() {
+        let session = session, output = output
+        sessionQueue.async { [weak self] in
+            do {
+                session.beginConfiguration()
+                defer { session.commitConfiguration() }
+                session.sessionPreset = .high
+                guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { throw ServiceFailure(message: "没有可用的后置相机。") }
+                let input = try AVCaptureDeviceInput(device: device)
+                guard session.canAddInput(input), session.canAddOutput(output) else { throw ServiceFailure(message: "无法启动相机，请从相册选择。") }
+                session.addInput(input); session.addOutput(output)
+                output.maxPhotoQualityPrioritization = .speed
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { self?.showFailure(message) }; return
+            }
+            session.startRunning()
+            DispatchQueue.main.async {
+                guard let self, self.visible else { return }
+                self.shutter.isEnabled = true; self.status.text = "拍完整题干和作答，尽量靠近并保持清晰"
+                self.view.setNeedsLayout()
+            }
+        }
+    }
+    @objc private func cancel() { onCancel?() }
+    @objc private func capture() {
+        guard session.isRunning else { return }
+        shutter.isEnabled = false; status.text = "正在拍摄…"
+        let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        settings.photoQualityPrioritization = .speed
+        if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+        output.capturePhoto(with: settings, delegate: self)
+    }
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        guard error == nil, let bytes = photo.fileDataRepresentation(), let image = UIImage(data: bytes) else {
+            DispatchQueue.main.async { [weak self] in self?.shutter.isEnabled = true; self?.showFailure("照片拍摄失败，请重试。") }; return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.visible else { return }
+            self.onImage?(image)
+        }
+    }
+    private func showFailure(_ message: String) {
+        guard visible else { return }
+        status.text = message
+        let alert = UIAlertController(title: "无法使用相机", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "返回", style: .cancel) { [weak self] _ in self?.onCancel?() })
+        if AVCaptureDevice.authorizationStatus(for: .video) == .denied {
+            alert.addAction(UIAlertAction(title: "打开系统设置", style: .default) { _ in
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            })
+        }
+        present(alert, animated: true)
     }
 }
 struct SystemShare: UIViewControllerRepresentable {

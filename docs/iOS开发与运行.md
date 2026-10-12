@@ -28,12 +28,12 @@ xcodebuild -project LittleStride.xcodeproj -scheme LittleStride \
 
 ## 数据与服务
 
-- 本地结构化 JSON 存入 Application Support/LittleStride，原图编码保存，文件原子写入。
+- 本地结构化 JSON 存入 Application Support/LittleStride，处理后的照片编码保存，串行后台编码与原子写入。
 - 恢复前检查版本、唯一编号和引用关系，旧文件快照保留于 Application Support/LittleStride/Recovery。
 - API Key 存于 `WhenUnlockedThisDeviceOnly` Keychain，备份无密钥，换机需重新输入。
-- Responses 与 Chat Completions 分别构造图文请求；本轮使用非流式响应，返回 JSON 需结构校验。
+- 支持 Responses、Chat Completions 和 Anthropic Messages 图文请求；请求非流式输出，也兼容服务商返回的 SSE。返回 JSON 需结构校验。
 - 当前只实现配置的文本及 JSON 检测，图片能力在实际识别中验证。服务商不兼容时显示错误，不静默切换。
-- 不输出远端错误正文或密钥到日志。网络请求使用短生命周期 ephemeral session。
+- 不输出远端错误正文或密钥到日志。网络请求复用 ephemeral session，显示上传阶段和等待时间。
 - 本轮没有调用实际 AI 服务，准确性、服务端收费及用户服务兼容性仍需联调。
 
 ## iCloud 的实际范围
@@ -55,6 +55,15 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
 ```
 
 已安装iOS 27运行时，并在iPhone 17e模拟器启动更新后的原生页面，检查首页浅色和深色显示。相机、打印机、通知、分享、实际Keychain与iCloud尚未完成全面验收；不要把编译和启动通过当作这些系统功能已经实机验收。
+
+## 本次交互与速度调整
+
+- 相机通过 AVFoundation 后台启动，拍摄后直接回到 App 预览。
+- 照片在后台缩至最长边 1800 像素，修正 Retina 渲染尺寸放大，缓存 JPEG 以供发送。相册通过 ImageIO 缩略解码。
+- 点击分析立即锁住发送按钮，居中弹窗显示 loading、上传阶段与等待秒数；失败显示原因并保留照片。
+- 成功弹窗停留 2 秒，关闭后自动滚到结果；重复分析需要明确选择。仍需核对后保存。
+- 按钮统一按压缩放、变暗与轻触反馈，AI 设置操作按钮整行可点击。
+- 未实测端到端耗时；服务商排队和模型推理时间由远端决定。账号授权仍待实现，详见 [AI 接入说明](AI接入说明.md)。
 
 ## 后续开发范围
 

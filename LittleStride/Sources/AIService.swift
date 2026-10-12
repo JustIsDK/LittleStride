@@ -31,15 +31,26 @@ struct ServiceFailure: LocalizedError {
     var message: String
     var errorDescription: String? { message }
 }
+private final class AIUploadObserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let progress: (@Sendable (String) -> Void)?
+    init(progress: (@Sendable (String) -> Void)?) { self.progress = progress }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        if totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend {
+            progress?("照片已发送，等待 AI 分析…")
+        } else if totalBytesExpectedToSend > 0 {
+            progress?("正在上传：\(min(100, totalBytesSent * 100 / totalBytesExpectedToSend))%")
+        }
+    }
+}
 enum SecretStore {
-    static func load() -> String {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "LittleStride.AI", kSecAttrAccount as String: "api-key", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+    static func load(account: String = "api-key") -> String {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "LittleStride.AI", kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
-    static func save(_ secret: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "LittleStride.AI", kSecAttrAccount as String: "api-key"]
+    static func save(_ secret: String, account: String = "api-key") throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "LittleStride.AI", kSecAttrAccount as String: account]
         if secret.isEmpty { SecItemDelete(query as CFDictionary); return }
         let value: [String: Any] = [kSecValueData as String: Data(secret.utf8), kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
         let status = SecItemUpdate(query as CFDictionary, value as CFDictionary)
@@ -49,16 +60,27 @@ enum SecretStore {
             guard result == errSecSuccess else { throw ServiceFailure(message: "Keychain 保存失败（\(result)）。") }
         } else if status != errSecSuccess { throw ServiceFailure(message: "Keychain 更新失败（\(status)）。") }
     }
+    static func load(configuration: AIConfiguration) -> String {
+        load(account: configuration.credentialScope == nil ? "api-key" : configuration.keyAccount)
+    }
 }
 struct AIService {
     let configuration: AIConfiguration
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 90
+        configuration.timeoutIntervalForResource = 120
+        return URLSession(configuration: configuration)
+    }()
     func endpoint() throws -> URL {
         guard let base = URL(string: configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)), base.scheme == "https", base.host != nil, base.user == nil, base.password == nil, base.query == nil, base.fragment == nil else { throw ServiceFailure(message: "请填写不含密钥或查询参数的 HTTPS Base URL。") }
-        guard !base.path.hasSuffix("/responses"), !base.path.hasSuffix("/chat/completions"), !configuration.model.trimmingCharacters(in: .whitespaces).isEmpty else { throw ServiceFailure(message: "请填写基础地址和准确模型 ID，不要把完整接口路径填入 Base URL。") }
-        return base.appendingPathComponent(configuration.api == "Responses" ? "responses" : "chat/completions")
+        guard !base.path.hasSuffix("/responses"), !base.path.hasSuffix("/chat/completions"), !base.path.hasSuffix("/messages"), !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ServiceFailure(message: "请填写基础地址和准确模型 ID，不要把完整接口路径填入 Base URL。") }
+        guard ["Responses", "Chat Completions", "Anthropic Messages"].contains(configuration.api) else { throw ServiceFailure(message: "请选择支持的接口协议。") }
+        let path = configuration.api == "Responses" ? "responses" : configuration.api == "Anthropic Messages" ? "messages" : "chat/completions"
+        return base.appendingPathComponent(path)
     }
-    func call(prompt: String, image: Data? = nil) async throws -> String {
-        let url = try endpoint(), key = SecretStore.load()
+    func call(prompt: String, image: Data? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        let url = try endpoint(), key = SecretStore.load(configuration: configuration)
         guard !key.isEmpty else { throw ServiceFailure(message: "尚未保存 API Key。") }
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -69,15 +91,25 @@ struct AIService {
             var content: [[String: Any]] = [["type": "input_text", "text": prompt]]
             if let image { content.append(["type": "input_image", "image_url": "data:image/jpeg;base64," + image.base64EncodedString()]) }
             body["input"] = [["role": "user", "content": content]]
+            if let effort = configuration.reasoningEffort, ["low", "medium", "high"].contains(effort) { body["reasoning"] = ["effort": effort] }
+        } else if configuration.api == "Anthropic Messages" {
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            var content: [[String: Any]] = [["type": "text", "text": prompt]]
+            if let image { content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": image.base64EncodedString()]]) }
+            body["messages"] = [["role": "user", "content": content]]
+            body["max_tokens"] = 4096
         } else {
             var content: [[String: Any]] = [["type": "text", "text": prompt]]
             if let image { content.append(["type": "image_url", "image_url": ["url": "data:image/jpeg;base64," + image.base64EncodedString()]]) }
             body["messages"] = [["role": "user", "content": content]]
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.finishTasksAndInvalidate() }
-        let (bytes, response) = try await session.data(for: request)
+        let payload = try JSONSerialization.data(withJSONObject: body)
+        try Task.checkCancellation()
+        progress?("正在连接并上传…")
+        let observer = AIUploadObserver(progress: progress)
+        let (bytes, response) = try await Self.session.upload(for: request, from: payload, delegate: observer)
+        try Task.checkCancellation()
+        progress?("正在读取分析结果…")
         guard let http = response as? HTTPURLResponse else { throw ServiceFailure(message: "服务未返回 HTTP 响应。") }
         guard (200..<300).contains(http.statusCode) else {
             let suggestion = http.statusCode == 401 ? "检查 Key、认证方式和服务权限。" : http.statusCode == 404 ? "检查接口协议与基础路径。" : http.statusCode == 429 ? "检查服务额度或稍后重试。" : "检查服务商兼容性或稍后重试。"
@@ -119,6 +151,7 @@ struct AIService {
         if let choices = root["choices"] as? [[String: Any]], choices.first?["finish_reason"] as? String == "length" {
             throw ServiceFailure(message: "AI 分析结果被截断，未写入题库。请缩小照片范围后重试。")
         }
+        if root["stop_reason"] as? String == "max_tokens" { throw ServiceFailure(message: "Claude 分析结果被截断，未写入题库。请缩小照片范围后重试。") }
     }
     private static func contentText(_ content: Any?) -> String? {
         if let text = content as? String { return text }
@@ -128,6 +161,7 @@ struct AIService {
         return text.isEmpty ? nil : text
     }
     private static func outputText(_ root: [String: Any]) -> String? {
+        if let text = contentText(root["content"]) { return text }
         if let text = root["output_text"] as? String, !text.isEmpty { return text }
         if let output = root["output"] as? [[String: Any]] {
             let text = output.compactMap { contentText($0["content"]) }.joined(separator: "\n")
@@ -151,6 +185,10 @@ struct AIService {
             }
             try validateResponse(root)
             let type = root["type"] as? String ?? ""
+            if type == "content_block_delta", let delta = root["delta"] as? [String: Any], delta["type"] as? String == "text_delta", let text = delta["text"] as? String { deltas += text }
+            if type == "content_block_start", let block = root["content_block"] as? [String: Any], block["type"] as? String == "text", let text = block["text"] as? String { deltas += text }
+            if type == "message_delta", let delta = root["delta"] as? [String: Any] { try validateResponse(delta) }
+            if type == "message_stop" { terminated = true }
             if type == "response.output_text.delta", let delta = root["delta"] as? String { deltas += delta }
             if type == "response.output_text.done", let text = root["text"] as? String { finalText = text }
             if type == "response.completed" {
@@ -173,8 +211,8 @@ struct AIService {
         }
         return text
     }
-    func decode<T: Decodable>(_ type: T.Type, prompt: String, image: Data? = nil) async throws -> T {
-        let response = try await call(prompt: prompt + "\n只输出一个JSON对象，不要Markdown或额外说明。示例中的所有字段必须保留，字符串未知时用空字符串，不要用null。", image: image)
+    func decode<T: Decodable>(_ type: T.Type, prompt: String, image: Data? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> T {
+        let response = try await call(prompt: prompt + "\n只输出一个JSON对象，不要Markdown或额外说明。示例中的所有字段必须保留，字符串未知时用空字符串，不要用null。", image: image, progress: progress)
         var text = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         if text.hasPrefix("```"), let firstLine = text.firstIndex(of: "\n"), let closing = text.range(of: "```", options: .backwards), closing.lowerBound > firstLine {
@@ -194,17 +232,17 @@ struct AIService {
         }
         catch { throw ServiceFailure(message: "已收到 AI 响应，但分析结果未通过结构校验，未写入题库。请重试或更换模型。") }
     }
-    func analyze(image: Data, profile: ChildProfile) async throws -> AIAnalysis {
+    func analyze(image: Data, profile: ChildProfile, progress: (@Sendable (String) -> Void)? = nil) async throws -> AIAnalysis {
         let prompt = """
         分析小学作业照片。年级：\(profile.grade)，学期：\(profile.term)。教材信息：\(profile.textbooks)。
         找出错误、受助或无法判断的题目；不为正确题编造错误。不清楚的内容留空，status写待核实。
         区分观察事实和可能原因；不能从简单错误推断态度差。知识点只按证据归类。最多返回12题。
         JSON格式：{"questions":[{"subject":"数学/语文/英语","text":"完整题干","answer":"正确答案，无法判断留空","studentAnswer":"照片原始作答","knowledge":"具体知识点","observation":"可观察错误","possibleCause":"尚需确认的可能原因","status":"错误/部分正确/待核实"}]}
         """
-        return try await decode(AIAnalysis.self, prompt: prompt, image: image)
+        return try await decode(AIAnalysis.self, prompt: prompt, image: image, progress: progress)
     }
-    func textbook(image: Data) async throws -> TextbookAnalysis {
-        try await decode(TextbookAnalysis.self, prompt: "识别教材封面、版权页、目录或当前学习页。仅按照片取证，不补造出版社、版本、目录。不因拍到某页就推断已掌握。返回JSON：{\"subject\":\"数学/语文/英语或空\",\"title\":\"\",\"publisher\":\"\",\"edition\":\"\",\"grade\":\"\",\"term\":\"\",\"progress\":\"仅当前可见章节\",\"uncertainty\":\"需核实项\"}。", image: image)
+    func textbook(image: Data, progress: (@Sendable (String) -> Void)? = nil) async throws -> TextbookAnalysis {
+        try await decode(TextbookAnalysis.self, prompt: "识别教材封面、版权页、目录或当前学习页。仅按照片取证，不补造出版社、版本、目录。不因拍到某页就推断已掌握。返回JSON：{\"subject\":\"数学/语文/英语或空\",\"title\":\"\",\"publisher\":\"\",\"edition\":\"\",\"grade\":\"\",\"term\":\"\",\"progress\":\"仅当前可见章节\",\"uncertainty\":\"需核实项\"}。", image: image, progress: progress)
     }
     func generate(_ q: Question, profile: ChildProfile) async throws -> AIAnalysis {
         try await decode(AIAnalysis.self, prompt: "为\(profile.grade)\(q.subject.rawValue)生成一道同类题。原题：\(q.text)，答案：\(q.answer)，解析：\(q.explanation)。保持知识点和难度，不拔高，核算答案。格式{\"questions\":[{\"subject\":\"\(q.subject.rawValue)\",\"text\":\"\",\"answer\":\"\",\"studentAnswer\":\"\",\"knowledge\":\"\",\"observation\":\"说明解法\",\"possibleCause\":\"\",\"status\":\"生成练习\"}]}。")

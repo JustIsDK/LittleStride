@@ -6,6 +6,7 @@ import Observation
     var error: String?
     var notice: String?
     private let file: URL
+    private let persistenceQueue = DispatchQueue(label: "LittleStride.persistence", qos: .utility)
     private var persistenceEnabled = true
     init(directory: URL? = nil) {
         let folder = directory ?? URL.applicationSupportDirectory.appendingPathComponent("LittleStride", isDirectory: true)
@@ -25,8 +26,15 @@ import Observation
     func save() {
         guard persistenceEnabled else { return }
         data.updatedAt = Date()
-        do { try JSONEncoder().encode(data).write(to: file, options: [.atomic, .completeFileProtectionUnlessOpen]) }
-        catch { self.error = "保存失败：\(error.localizedDescription)" }
+        let snapshot = data, destination = file
+        // Enqueue on the main actor in revision order; encoding photos must not block the UI.
+        persistenceQueue.async { [weak self] in
+            do { try JSONEncoder().encode(snapshot).write(to: destination, options: [.atomic, .completeFileProtectionUnlessOpen]) }
+            catch {
+                let message = "保存失败：\(error.localizedDescription)"
+                Task { @MainActor [weak self] in self?.error = message }
+            }
+        }
     }
     func question(_ id: UUID) -> Question? { data.questions.first { $0.id == id } }
     func weakness(_ id: UUID?) -> Weakness? { data.weaknesses.first { $0.id == id } }
@@ -137,6 +145,8 @@ import Observation
               incoming.sheets.allSatisfy({ $0.questions.allSatisfy { ids.contains($0.id) } }),
               [5, 10].contains(incoming.dailyMinutes),
               incoming.rewards.allSatisfy({ $0.points >= 0 }) else { throw StoreFailure.invalidRelations }
+        // Drain earlier writes before preserving the database being replaced.
+        persistenceQueue.sync {}
         // Preserve the current database before replacement, outside temporary storage.
         let backupFolder = file.deletingLastPathComponent().appendingPathComponent("Recovery", isDirectory: true)
         try FileManager.default.createDirectory(at: backupFolder, withIntermediateDirectories: true)

@@ -32,21 +32,37 @@ struct RecordSheetView: View {
     @State private var drafts: [UUID: AttemptDraft] = [:]
     @State private var picker: PhotosPickerItem?
     @State private var photo: UIImage?
+    @State private var photoBytes: Data?
+    @State private var preparingPhoto = false
     @State private var camera = false
     @State private var busy = false
+    @State private var analysisTask: Task<Void, Never>?
+    @State private var analysisStage = ""
+    @State private var analysisStarted = Date()
+    @State private var analysisFinished = false
+    @State private var analysisSummary = ""
+    @State private var confirmRetry = false
+    @State private var analysisDialog = false
+    @State private var analysisError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var checked = false
     @State private var shareResult = false
     private var sheet: PracticeSheet? { store.data.sheets.first { $0.id == sheetID } }
     var body: some View {
-        Form {
+        ScrollViewReader { proxy in Form {
             if let sheet {
                 Section { Text(sheet.code); Text(sheet.completed ? "此练习单已记录，重复打开不会重复奖励。" : "逐题核对结果和帮助程度，然后保存。") }
                 if !sheet.completed {
                     Section("结果照片（可选）") {
                         if let photo { Image(uiImage: photo).resizable().scaledToFit().frame(maxHeight: 220) }
-                        PhotosPicker("从相册选择", selection: $picker, matching: .images)
-                        Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "当前设备无相机，请选择相册。" } }
-                        Button(busy ? "识别中…" : "发送照片，AI 辅助批改") { Task { await analyze(sheet) } }.disabled(photo == nil || busy)
+                        if preparingPhoto { SwiftUI.ProgressView("正在准备照片…") }
+                        PhotosPicker("从相册选择", selection: $picker, matching: .images).disabled(busy || preparingPhoto)
+                        Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "当前设备无相机，请选择相册。" } }.disabled(busy || preparingPhoto)
+                        Button(busy ? "识别中…" : analysisFinished ? "已识别完成 · 请核对结果" : "发送照片，AI 辅助批改") { startAnalysis(sheet) }.disabled(photoBytes == nil || busy || preparingPhoto || analysisFinished)
+                        if analysisFinished {
+                            Label(analysisSummary, systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(StrideStyle.green)
+                            Button("重新识别这张照片") { confirmRetry = true }.font(.caption)
+                        }
                         Text("可不使用 AI，直接填写实际结果。照片只有在点击分析时发往配置服务。").font(.caption)
                     }
                     ForEach(sheet.questions) { q in
@@ -57,7 +73,7 @@ struct RecordSheetView: View {
                             Picker("关键理由", selection: draft(q.id, \.reason)) { ForEach(["能", "部分能", "不能", "未观察", "不适用"], id: \.self) { Text($0) } }
                             TextField("本次表现 / 备注", text: draft(q.id, \.note), axis: .vertical)
                             Toggle("需要的订正已完成", isOn: draft(q.id, \.corrected))
-                        }
+                        }.id(q.id).disabled(busy)
                     }
                     Section {
                         Toggle("已核对作答与判题结果", isOn: $checked)
@@ -67,26 +83,75 @@ struct RecordSheetView: View {
                 } else { NavigationLink("本次成果与分享", destination: ResultShareView(sheetID: sheetID)) }
             }
         }.navigationTitle("练习结果回录").stridePage()
+        .onChange(of: analysisDialog) {
+            if !analysisDialog && analysisFinished, let first = sheet?.questions.first {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(first.id, anchor: .top) }
+            }
+        }
+        }
+        .overlay {
+            if analysisDialog {
+                AnalysisStatusDialog(busy: !analysisFinished && analysisError == nil, success: analysisFinished, message: analysisError ?? (analysisFinished ? analysisSummary : analysisStage), started: analysisStarted, cancel: { analysisTask?.cancel() }, close: { analysisDialog = false })
+            }
+        }
         .onAppear { if let sheet { for q in sheet.questions where drafts[q.id] == nil { drafts[q.id] = AttemptDraft() } } }
-        .sheet(isPresented: $camera) { CameraPicker { photo = $0; checked = false } }
-        .onChange(of: picker) { Task { if let bytes = try? await picker?.loadTransferable(type: Data.self) { photo = UIImage(data: bytes); checked = false } } }
+        .sheet(isPresented: $camera) { CameraPicker { image in Task { await preparePhoto(image: image) } } }
+        .onChange(of: picker) {
+            let selection = picker
+            Task {
+                preparingPhoto = true
+                if let bytes = try? await selection?.loadTransferable(type: Data.self) { await preparePhoto(data: bytes) }
+                else { preparingPhoto = false; store.error = "无法读取所选照片，请重试。" }
+            }
+        }
         .navigationDestination(isPresented: $shareResult) { ResultShareView(sheetID: sheetID) }
+        .onDisappear { analysisTask?.cancel() }
+        .sensoryFeedback(.success, trigger: analysisFinished) { _, finished in finished }
+        .confirmationDialog("重新识别会再次发送照片，并可能产生费用。", isPresented: $confirmRetry, titleVisibility: .visible) {
+            Button("重新识别") { if let sheet { startAnalysis(sheet, retry: true) } }
+            Button("取消", role: .cancel) {}
+        }
     }
     private func draft<Value>(_ id: UUID, _ path: WritableKeyPath<AttemptDraft, Value>) -> Binding<Value> {
         Binding(get: { (drafts[id] ?? AttemptDraft())[keyPath: path] }, set: { var d = drafts[id] ?? AttemptDraft(); d[keyPath: path] = $0; drafts[id] = d; checked = false })
     }
+    private func startAnalysis(_ sheet: PracticeSheet, retry: Bool = false) {
+        guard !busy, !preparingPhoto, photoBytes != nil, !analysisFinished || retry else { return }
+        busy = true; analysisFinished = false; analysisSummary = ""; analysisError = nil; analysisDialog = true
+        analysisStarted = Date(); analysisStage = "准备请求…"
+        analysisTask = Task { await analyze(sheet) }
+    }
     private func analyze(_ sheet: PracticeSheet) async {
-        guard let bytes = photo?.resizedJPEG() else { return }
-        busy = true; defer { busy = false }
+        defer { busy = false }
+        guard let bytes = photoBytes else { return }
         do {
             let mapping = sheet.questions.map { "\($0.id.uuidString): \($0.text)；参考答案：\($0.answer)" }.joined(separator: "\n")
-            let result = try await AIService(configuration: store.data.ai).decode(AICheck.self, prompt: "核对照片中的练习结果。题目编号与参考：\n\(mapping)\n开放题允许合理不同表述。看不清或未作答不能判错误；帮助程度不能从照片推断。返回{\"results\":[{\"id\":\"原题UUID\",\"answer\":\"孩子答案\",\"result\":\"正确/部分正确/错误/未作答/无法判断\",\"observation\":\"可观察事实\"}]}。", image: bytes)
+            let progress: @Sendable (String) -> Void = { stage in Task { @MainActor in if busy { analysisStage = stage } } }
+            let result = try await AIService(configuration: store.data.ai).decode(AICheck.self, prompt: "核对照片中的练习结果。题目编号与参考：\n\(mapping)\n开放题允许合理不同表述。看不清或未作答不能判错误；帮助程度不能从照片推断。返回{\"results\":[{\"id\":\"原题UUID\",\"answer\":\"孩子答案\",\"result\":\"正确/部分正确/错误/未作答/无法判断\",\"observation\":\"可观察事实\"}]}。", image: bytes, progress: progress)
+            try Task.checkCancellation()
+            var recognized = Set<UUID>()
             for r in result.results {
                 if let id = UUID(uuidString: r.id), sheet.questions.contains(where: { $0.id == id }), ["正确", "部分正确", "错误", "未作答", "无法判断"].contains(r.result) {
+                    recognized.insert(id)
                     var d = drafts[id] ?? AttemptDraft(); d.answer = r.answer; d.result = r.result; d.note = r.observation; drafts[id] = d
                 }
             }; checked = false
-        } catch { store.error = error.localizedDescription }
+            analysisSummary = "识别完成：\(recognized.count) / \(sheet.questions.count) 题已填入结果，请逐题核对。"
+            analysisFinished = true
+            try await Task.sleep(for: .seconds(2))
+            analysisDialog = false
+        } catch {
+            if Task.isCancelled { analysisDialog = false }
+            else { analysisError = error.localizedDescription }
+        }
+    }
+    private func preparePhoto(image: UIImage? = nil, data: Data? = nil) async {
+        preparingPhoto = true; photo = nil; photoBytes = nil; checked = false; analysisFinished = false; analysisSummary = ""
+        let prepared = if let image { await PhotoPreparation.prepare(image: image) }
+            else if let data { await PhotoPreparation.prepare(data: data) } else { nil as PreparedPhoto? }
+        preparingPhoto = false
+        guard let prepared else { store.error = "照片处理失败，请重试。"; return }
+        photo = prepared.preview; photoBytes = prepared.jpeg
     }
     private func save(_ sheet: PracticeSheet) {
         let attempts = sheet.questions.compactMap { q -> Attempt? in

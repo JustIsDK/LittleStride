@@ -105,36 +105,125 @@ struct AISettingsView: View {
     @State private var keyPresent = false
     @State private var busy = false
     @State private var testResult = "尚未检测"
+    @State private var connectionMode = "key"
+    @State private var provider: AIProvider = .custom
     var body: some View {
         @Bindable var store = store
         Form {
-            Section("个人服务连接") {
-                Picker("接口协议", selection: $store.data.ai.api) {
-                    Text("Responses").tag("Responses")
-                    Text("Chat Completions").tag("Chat Completions")
-                }
-                TextField("HTTPS Base URL（可含 /v1）", text: $store.data.ai.baseURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField("准确模型 ID", text: $store.data.ai.model).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField(keyPresent ? "已保存 Key；留空不修改" : "API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("认证请求头名称", text: $store.data.ai.authHeader).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Toggle("添加 Bearer 前缀", isOn: $store.data.ai.bearer)
-                Text("Key 仅保存在本机 Keychain，不随备份或 iCloud 同步。换设备需重新填写。请求采用非流式以兼容结构化分析。").font(.caption)
+            Section("接入方式") {
+                Picker("接入方式", selection: $connectionMode) {
+                    Text("API Key").tag("key")
+                    Text("账号授权").tag("account")
+                }.pickerStyle(.segmented)
+                Text(connectionMode == "key" ? "使用官方 API 或自定义服务。选服务商、获取参数，再保存并检测。" : "账号授权需要服务商支持第三方 App 的授权流程，当前尚未接通。登录控制台后获取 API Key，可以先用 API Key 方式连接。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Section("保存与检测") {
+            Section("选择服务商") {
+                Picker("服务商", selection: $provider) {
+                    ForEach(AIProvider.allCases) { item in Text(item.name).tag(item) }
+                }
+                Text(provider.guide).font(.caption).foregroundStyle(.secondary)
+                if let url = provider.consoleURL { Link("登录 \(provider.name) 控制台 / 获取 API Key ↗", destination: url) }
+                if connectionMode == "key" && provider != .custom {
+                    Button("填入该服务商的推荐参数") { applyProvider() }
+                    Text("会替换地址与协议并清空模型输入。每个服务地址的密钥分开保存；切换不会把旧服务的 Key 发给新服务。模型 ID 请按控制台填写。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if connectionMode == "account" {
+                Section("授权接入状态") {
+                    Label("账号授权尚未接入", systemImage: "person.crop.circle.badge.clock")
+                    Text("各服务商的账号授权需要分别核实并适配。网页登录成功只代表登录服务商网站，不代表 LittleStride 已获得调用权限。App 不收集服务商账号密码。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if provider == .openai {
+                        Link("OpenAI 账号授权官方说明 ↗", destination: URL(string: "https://developers.openai.com/siwc/token-sharing-open-source/sign-in")!)
+                    }
+                    Button("改用 API Key 接入") { connectionMode = "key" }
+                }
+            } else {
+                Section("连接参数") {
+                    Picker("接口协议", selection: $store.data.ai.api) {
+                        Text("Responses").tag("Responses")
+                        Text("Chat Completions").tag("Chat Completions")
+                        Text("Anthropic Messages").tag("Anthropic Messages")
+                    }
+                    Text("按服务商 API 文档选择协议。Claude 官方用 Anthropic Messages；中转服务按中转商文档选择。Codex 的 wire_api = responses 对应 Responses。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("服务地址 · Base URL")
+                        TextField("https://服务域名/v1", text: $store.data.ai.baseURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        Text("从服务商文档复制基础地址，保留 /v1 等路径前缀；不要附加 /responses、/chat/completions 或 /messages。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("模型 ID")
+                        TextField("从模型列表复制准确 ID", text: $store.data.ai.model).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("使用 API 模型 ID，不能只填产品名称。作业、教材和回录识别都需要模型支持图片输入。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("API Key")
+                        SecureField(keyPresent ? "此地址已保存 Key；留空不修改" : "粘贴此服务商的 API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("在服务商开发者控制台的 API Keys 页面创建。只粘贴密钥本身，不要加 Bearer。Codex 的 env_key 是变量名，应填变量实际值；auth.json 的登录令牌不能当作 API Key。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    DisclosureGroup("高级认证与响应速度") {
+                        TextField("认证请求头名称", text: $store.data.ai.authHeader).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Toggle("添加 Bearer 前缀", isOn: $store.data.ai.bearer)
+                        Text("常见兼容接口使用 Authorization + Bearer。Claude 官方使用 x-api-key 且关闭 Bearer。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if store.data.ai.api == "Responses" {
+                            Picker("模型思考强度", selection: Binding(get: { store.data.ai.reasoningEffort ?? "default" }, set: { store.data.ai.reasoningEffort = $0 == "default" ? nil : $0 })) {
+                                Text("服务默认").tag("default"); Text("低 · 可减少等待").tag("low")
+                                Text("中").tag("medium"); Text("高").tag("high")
+                            }
+                            Text("仅用于支持 reasoning.effort 的 Responses 模型。不确定时用服务默认；低强度可能减少等待，也可能影响分析质量。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Key 只保存在本机 Keychain，不随备份或 iCloud 同步。换设备需重新填写。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if connectionMode == "key" { Section("保存与检测") {
                 Button("保存连接配置") { save() }
                 Button(busy ? "检测中…" : "检测文本与结构化输出") { Task { await test() } }.disabled(busy)
                 Text(testResult).font(.caption).textSelection(.enabled)
                 Text("此检测会实际访问配置的服务并可能产生费用；图片能力需在照片分析时验证。不自动切换服务商。").font(.caption).foregroundStyle(.secondary)
-                if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save(""); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } } }
-            }
-        }.navigationTitle("AI 服务设置").stridePage().onAppear { keyPresent = !SecretStore.load().isEmpty }
+                if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save("", account: store.data.ai.keyAccount); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } } }
+            } }
+        }.buttonStyle(StridePressStyle(fullWidth: true)).navigationTitle("AI 服务设置").stridePage().onAppear {
+            provider = AIProvider(rawValue: store.data.ai.provider ?? "custom") ?? .custom
+            migrateKey(); refreshKeyStatus()
+        }
+        .onChange(of: store.data.ai.baseURL) { refreshKeyStatus() }
         .onDisappear { key = ""; store.save() }
+    }
+    private func refreshKeyStatus() { keyPresent = !SecretStore.load(configuration: store.data.ai).isEmpty }
+    private func migrateKey() {
+        guard store.data.ai.credentialScope == nil else { return }
+        do {
+            let legacy = SecretStore.load()
+            if !legacy.isEmpty && !store.data.ai.baseURL.isEmpty { try SecretStore.save(legacy, account: store.data.ai.keyAccount) }
+            store.data.ai.credentialScope = store.data.ai.keyAccount
+            store.save()
+        } catch { store.error = error.localizedDescription }
+    }
+    private func applyProvider() {
+        key = ""; store.data.ai.provider = provider.rawValue
+        store.data.ai.baseURL = provider.baseURL; store.data.ai.api = provider.api
+        store.data.ai.model = ""; store.data.ai.reasoningEffort = nil
+        store.data.ai.authHeader = provider == .claude ? "x-api-key" : "Authorization"
+        store.data.ai.bearer = provider != .claude
+        store.data.ai.credentialScope = store.data.ai.keyAccount
+        refreshKeyStatus(); testResult = "推荐地址与协议已填入；请填写模型 ID 和该服务地址的 Key。"
     }
     @discardableResult private func save() -> Bool {
         do {
             _ = try AIService(configuration: store.data.ai).endpoint()
-            if !key.isEmpty { try SecretStore.save(key); key = "" }
-            keyPresent = !SecretStore.load().isEmpty; store.save(); testResult = "配置已保存，尚未检测当前连接。"; return true
+            if !key.isEmpty { try SecretStore.save(key.trimmingCharacters(in: .whitespacesAndNewlines), account: store.data.ai.keyAccount); key = "" }
+            store.data.ai.credentialScope = store.data.ai.keyAccount
+            refreshKeyStatus(); store.save(); testResult = "配置已保存，尚未检测当前连接。"; return true
         } catch { store.error = error.localizedDescription; return false }
     }
     private func test() async {
