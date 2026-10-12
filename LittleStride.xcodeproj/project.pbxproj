@@ -1,0 +1,35 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+3685E330EC5277A9DD5661C6 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = LittleStride/Resources/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+F0C3048B9C4C204F3473B058 = { isa = PBXBuildFile; fileRef = 3685E330EC5277A9DD5661C6; };
+AABD728837A83499BC516FB8 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/AIService.swift"; sourceTree = SOURCE_ROOT; };
+99F621673E7ADB8836D06D8E = { isa = PBXBuildFile; fileRef = AABD728837A83499BC516FB8; };
+AF3F63F6EABE2FE9D4D1B8F6 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/App.swift"; sourceTree = SOURCE_ROOT; };
+9E1FBDCF039160110E2ED74F = { isa = PBXBuildFile; fileRef = AF3F63F6EABE2FE9D4D1B8F6; };
+88AB7B01CFDF3552CF42149B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/CaptureViews.swift"; sourceTree = SOURCE_ROOT; };
+D03B22ED750457691EB40AA8 = { isa = PBXBuildFile; fileRef = 88AB7B01CFDF3552CF42149B; };
+78FD430803560F137BDECEE8 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/Models.swift"; sourceTree = SOURCE_ROOT; };
+C28E3B592A560C32484F497E = { isa = PBXBuildFile; fileRef = 78FD430803560F137BDECEE8; };
+DA777FC242412C010BC1B87F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/PracticeViews.swift"; sourceTree = SOURCE_ROOT; };
+8BD32F1D282FA8598BE093D2 = { isa = PBXBuildFile; fileRef = DA777FC242412C010BC1B87F; };
+D6863DB17F6F2C0965F0BCF5 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/SettingsViews.swift"; sourceTree = SOURCE_ROOT; };
+847156A937AEAD783D918287 = { isa = PBXBuildFile; fileRef = D6863DB17F6F2C0965F0BCF5; };
+CADF772F7C41FE1CBDB1993E = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/Store.swift"; sourceTree = SOURCE_ROOT; };
+D7FCDAA751F5C6E177E3CF5F = { isa = PBXBuildFile; fileRef = CADF772F7C41FE1CBDB1993E; };
+CF85E68B60734C1C2C6A73B8 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LittleStride/Sources/SystemServices.swift"; sourceTree = SOURCE_ROOT; };
+C21F3B177237BC3D8FED5AF8 = { isa = PBXBuildFile; fileRef = CF85E68B60734C1C2C6A73B8; };
+38A007151ABE87CC01A5B6E9 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = LittleStride.app; sourceTree = BUILT_PRODUCTS_DIR; };
+64292B1C2B2E13EAD8788FC8 = { isa = PBXGroup; children = (AABD728837A83499BC516FB8,AF3F63F6EABE2FE9D4D1B8F6,88AB7B01CFDF3552CF42149B,78FD430803560F137BDECEE8,DA777FC242412C010BC1B87F,D6863DB17F6F2C0965F0BCF5,CADF772F7C41FE1CBDB1993E,CF85E68B60734C1C2C6A73B8,FBDC4F23F93125BBEEAE800C); sourceTree = "<group>"; };
+FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (38A007151ABE87CC01A5B6E9); name = Products; sourceTree = "<group>"; };
+BCE16DD0260827ECF338C787 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (99F621673E7ADB8836D06D8E,9E1FBDCF039160110E2ED74F,D03B22ED750457691EB40AA8,C28E3B592A560C32484F497E,8BD32F1D282FA8598BE093D2,847156A937AEAD783D918287,D7FCDAA751F5C6E177E3CF5F,C21F3B177237BC3D8FED5AF8); runOnlyForDeploymentPostprocessing = 0; };
+7561BFB015D8F536760CB671 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+0189424A5A60FED329FA868E = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (F0C3048B9C4C204F3473B058); runOnlyForDeploymentPostprocessing = 0; };
+0E8A3AD980EC179856012B7E = { isa = PBXNativeTarget; buildConfigurationList = C57128001CE614BF8549D6BB; buildPhases = (BCE16DD0260827ECF338C787,7561BFB015D8F536760CB671,0189424A5A60FED329FA868E); buildRules = (); dependencies = (); name = LittleStride; productName = LittleStride; productReference = 38A007151ABE87CC01A5B6E9; productType = "com.apple.product-type.application"; };
+AB52CB08E0FDF02BF6C67C33 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; }; };
+59E1BEE911F66DA37FEBACDC = { isa = XCBuildConfiguration; name = Debug; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; PRODUCT_BUNDLE_IDENTIFIER = com.justisdk.LittleStride; PRODUCT_NAME = "$(TARGET_NAME)"; INFOPLIST_FILE = LittleStride/Resources/Info.plist; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 7MJT6LS844; TARGETED_DEVICE_FAMILY = 1; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; MARKETING_VERSION = 0.1.0; CURRENT_PROJECT_VERSION = 1; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; }; };
+5283471FF90C511CFE244FFF = { isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; }; };
+F4C425279CD5DDD18FD6DC6D = { isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; PRODUCT_BUNDLE_IDENTIFIER = com.justisdk.LittleStride; PRODUCT_NAME = "$(TARGET_NAME)"; INFOPLIST_FILE = LittleStride/Resources/Info.plist; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 7MJT6LS844; TARGETED_DEVICE_FAMILY = 1; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; MARKETING_VERSION = 0.1.0; CURRENT_PROJECT_VERSION = 1; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; };
+862894B703A6DEDF96A9DD6C = { isa = XCConfigurationList; buildConfigurations = (AB52CB08E0FDF02BF6C67C33,5283471FF90C511CFE244FFF); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+C57128001CE614BF8549D6BB = { isa = XCConfigurationList; buildConfigurations = (59E1BEE911F66DA37FEBACDC,F4C425279CD5DDD18FD6DC6D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { LastUpgradeCheck = 2700; }; buildConfigurationList = 862894B703A6DEDF96A9DD6C; compatibilityVersion = "Xcode 14.0"; developmentRegion = "zh-Hans"; hasScannedForEncodings = 0; knownRegions = ("zh-Hans",en,Base); mainGroup = 64292B1C2B2E13EAD8788FC8; productRefGroup = FBDC4F23F93125BBEEAE800C; projectDirPath = ""; projectRoot = ""; targets = (0E8A3AD980EC179856012B7E); };
+}; rootObject = 98F54143AB4E86B28C3AFEE0; }
