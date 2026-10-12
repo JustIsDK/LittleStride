@@ -1,7 +1,11 @@
 import SwiftUI
 
 @main struct LittleStrideApp: App {
-    @State private var store = LearningStore()
+    @State private var store: LearningStore = {
+        let store = LearningStore()
+        SecretStore.migrateLegacy(in: store)
+        return store
+    }()
     @AppStorage("appearance") private var appearance = "system"
     var body: some Scene {
         WindowGroup {
@@ -134,11 +138,12 @@ struct RootView: View {
     @State private var tab = 0
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { TodayView() }.id(tab).tag(0)
-            NavigationStack { CaptureView() }.id(tab).tag(1)
-            NavigationStack { LibraryView() }.id(tab).tag(2)
-            NavigationStack { ProgressView() }.id(tab).tag(3)
+            NavigationStack { TodayView() }.tag(0)
+            NavigationStack { CaptureView() }.tag(1)
+            NavigationStack { LibraryView() }.tag(2)
+            NavigationStack { ProgressView() }.tag(3)
         }
+        .disabled(store.writing)
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 0) {
@@ -193,8 +198,8 @@ struct TodayView: View {
                         NavigationLink("查看选题依据", destination: TodayQuestionsView())
                         Spacer()
                         Menu("来不及？延后") {
-                            Button("明天最早安排") { store.deferQuestions(plan.map(\.id), days: 1) }
-                            Button("后天最早安排") { store.deferQuestions(plan.map(\.id), days: 2) }
+                            Button("明天最早安排") { Task { await store.deferQuestions(plan.map(\.id), days: 1) } }
+                            Button("后天最早安排") { Task { await store.deferQuestions(plan.map(\.id), days: 2) } }
                         }
                     }.font(.caption).frame(minHeight: 44)
                 }
@@ -254,7 +259,7 @@ struct TodayView: View {
                 if plan.isEmpty {
                     NavigationLink("查看学习进展", destination: ProgressView()).buttonStyle(StrideButtonStyle())
                 } else {
-                    Button("预览并打印练习单") { sheet = store.makeSheet(plan.map(\.question)) }
+                    Button("预览并打印练习单") { Task { var created: PracticeSheet?; if await store.confirm({ created = store.makeSheet(plan.map(\.question)) }) { sheet = created } } }
                         .buttonStyle(StrideButtonStyle())
                 }
                 NavigationLink(destination: CaptureView(initialMode: "练习回录")) {
@@ -468,7 +473,7 @@ struct QuestionDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     StrideCard { Tag(text: q.subject.rawValue); Text(q.text).font(.title3); Text("原始作答：\(q.originalAnswer.isEmpty ? "未记录" : q.originalAnswer)"); Text("答案：\(q.answer.isEmpty ? "待核实" : q.answer)"); Text(q.explanation).foregroundStyle(.secondary) }
                     StrideCard { Text("观察事实").font(.headline); Text(q.evidence.isEmpty ? "待补充" : q.evidence); Text("可能原因（未确认）").font(.headline); Text(q.possibleCause.isEmpty ? "尚无证据，不能推断" : q.possibleCause); Text("来源：\(q.source)").font(.caption).foregroundStyle(.secondary) }
-                    if let imageID = q.imageID, let asset = store.data.photos.first(where: { $0.id == imageID }), let image = UIImage(data: asset.data) { Image(uiImage: image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 16)) }
+                    if let imageID = q.imageID, let bytes = store.photoData(imageID), let image = UIImage(data: bytes) { Image(uiImage: image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 16)) }
                     if let w = store.weakness(q.weaknessID) { StrideCard { Text(w.title).font(.headline); Text("\(w.priority) · \(w.status)"); Text("下次回看：\(w.nextDate.formatted(date: .abbreviated, time: .omitted))") } }
                     NavigationLink("修改题目 / 核实信息", destination: QuestionEditorView(existing: q))
                     Button(busy ? "生成中…" : "AI 生成一道同类题") { Task { await generate(q) } }.buttonStyle(StrideButtonStyle()).disabled(busy || q.needsVerification)

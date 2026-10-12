@@ -1,6 +1,6 @@
 import Foundation
 @main struct RuleCheck {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent("LittleStride-rulecheck-\(UUID())")
         let store = LearningStore(directory: directory)
         // Isolated temporary storage; never writes to the app database.
@@ -27,15 +27,16 @@ import Foundation
         store.record([later], sheetID: laterSheet.id)
         precondition(store.data.weaknesses[0].status == "暂时退出")
         precondition(store.points == 8)
+        try await store.persist()
         let bytes = try JSONEncoder().encode(store.data)
         let decoded = try JSONDecoder().decode(AppData.self, from: bytes)
         precondition(decoded.attempts.count == 3 && decoded.rewards.count == 4)
         precondition(!String(data: bytes, encoding: .utf8)!.contains("api-key"))
-        try store.restore(bytes)
+        try await store.restore(bytes)
         let reloaded = LearningStore(directory: directory)
         precondition(reloaded.data.attempts.count == 3 && reloaded.points == 8)
         var invalid = decoded; invalid.questions = []
-        do { try store.restore(JSONEncoder().encode(invalid)); preconditionFailure("Invalid relations were accepted") }
+        do { try await store.restore(JSONEncoder().encode(invalid)); preconditionFailure("Invalid relations were accepted") }
         catch StoreFailure.invalidRelations { }
         precondition(store.data.questions.count == 2)
         let recovery = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("Recovery"), includingPropertiesForKeys: nil)

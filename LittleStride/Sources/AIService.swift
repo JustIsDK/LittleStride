@@ -34,7 +34,18 @@ struct ServiceFailure: LocalizedError {
 private final class AIUploadObserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let progress: (@Sendable (String) -> Void)?
     private let started = Date()
-    init(progress: (@Sendable (String) -> Void)?) { self.progress = progress }
+    private let timing: (@Sendable (AITiming) -> Void)?
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        let transactions = metrics.transactionMetrics
+        func duration(_ from: Date?, _ to: Date?) -> Double { guard let from, let to else { return 0 }; return max(0, to.timeIntervalSince(from)) }
+        var result = AITiming()
+        result.connection = transactions.reduce(0) { $0 + duration($1.domainLookupStartDate, $1.domainLookupEndDate) + duration($1.connectStartDate, $1.connectEndDate) }
+        result.upload = transactions.reduce(0) { $0 + duration($1.requestStartDate, $1.requestEndDate) }
+        result.wait = transactions.reduce(0) { $0 + duration($1.requestEndDate, $1.responseStartDate) }
+        result.receive = transactions.reduce(0) { $0 + duration($1.responseStartDate, $1.responseEndDate) }
+        timing?(result)
+    }
+    init(progress: (@Sendable (String) -> Void)?, timing: (@Sendable (AITiming) -> Void)?) { self.progress = progress; self.timing = timing }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         if totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend {
             progress?("上传完成（\(Int(Date().timeIntervalSince(started))) 秒），等待 AI 分析…")
@@ -52,7 +63,7 @@ enum SecretStore {
     }
     static func save(_ secret: String, account: String = "api-key") throws {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "LittleStride.AI", kSecAttrAccount as String: account]
-        if secret.isEmpty { SecItemDelete(query as CFDictionary); return }
+        if secret.isEmpty { let status = SecItemDelete(query as CFDictionary); guard status == errSecSuccess || status == errSecItemNotFound else { throw ServiceFailure(message: "Keychain 删除失败（\(status)）。") }; return }
         let value: [String: Any] = [kSecValueData as String: Data(secret.utf8), kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
         let status = SecItemUpdate(query as CFDictionary, value as CFDictionary)
         if status == errSecItemNotFound {
@@ -61,12 +72,25 @@ enum SecretStore {
             guard result == errSecSuccess else { throw ServiceFailure(message: "Keychain 保存失败（\(result)）。") }
         } else if status != errSecSuccess { throw ServiceFailure(message: "Keychain 更新失败（\(status)）。") }
     }
+    @MainActor static func migrateLegacy(in store: LearningStore) {
+        guard store.canSave, store.data.ai.credentialScope == nil else { return }
+        do {
+            let legacy = load()
+            if !legacy.isEmpty, (try? AIService(configuration: store.data.ai).endpoint()) != nil {
+                try save(legacy, account: store.data.ai.keyAccount)
+            }
+            try save("")
+            store.data.ai.credentialScope = store.data.ai.keyAccount
+            store.save()
+        } catch { store.error = "旧 Key 迁移失败，请重新填写：" + error.localizedDescription }
+    }
     static func load(configuration: AIConfiguration) -> String {
-        load(account: configuration.credentialScope == nil ? "api-key" : configuration.keyAccount)
+        load(account: configuration.keyAccount)
     }
 }
 struct AIService {
     let configuration: AIConfiguration
+    var timing: (@Sendable (AITiming) -> Void)? = nil
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 90
@@ -107,7 +131,7 @@ struct AIService {
         let payload = try JSONSerialization.data(withJSONObject: body)
         try Task.checkCancellation()
         progress?("正在连接并上传…")
-        let observer = AIUploadObserver(progress: progress)
+        let observer = AIUploadObserver(progress: progress, timing: timing)
         let (bytes, response) = try await Self.session.upload(for: request, from: payload, delegate: observer)
         try Task.checkCancellation()
         progress?("正在读取分析结果…")
@@ -117,6 +141,8 @@ struct AIService {
             // No remote response body or credential is surfaced in diagnostic logs.
             throw ServiceFailure(message: "HTTP \(http.statusCode) · \(url.path)\n\(suggestion)")
         }
+        let parseStarted = Date()
+        defer { var value = AITiming(); value.parse = Date().timeIntervalSince(parseStarted); timing?(value) }
         return try Self.responseText(bytes, contentType: http.value(forHTTPHeaderField: "Content-Type") ?? "")
     }
     // 部分兼容服务忽略 stream:false，仍返回 SSE。两种协议均在这里解析。
@@ -214,6 +240,8 @@ struct AIService {
     }
     func decode<T: Decodable>(_ type: T.Type, prompt: String, image: Data? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> T {
         let response = try await call(prompt: prompt + "\n只输出一个JSON对象，不要Markdown或额外说明。示例中的所有字段必须保留，字符串未知时用空字符串，不要用null。", image: image, progress: progress)
+        let parseStarted = Date()
+        defer { var result = AITiming(); result.parse = Date().timeIntervalSince(parseStarted); timing?(result) }
         var text = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         if text.hasPrefix("```"), let firstLine = text.firstIndex(of: "\n"), let closing = text.range(of: "```", options: .backwards), closing.lowerBound > firstLine {

@@ -142,11 +142,11 @@ enum AIProvider: String, CaseIterable, Identifiable {
 }
 struct PhotoAsset: Codable, Identifiable {
     var id = UUID()
-    var data: Data
+    var data: Data? // Only legacy files and portable backups embed bytes.
     var date = Date()
 }
 struct AppData: Codable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var profile = ChildProfile()
     var questions: [Question] = []
     var weaknesses: [Weakness] = []
@@ -189,4 +189,24 @@ struct ObservationDimension: Identifiable {
         .init(id: "check", group: "学习过程", title: "检查与订正", prompt: "能否按约定检查并处理错误？"),
         .init(id: "recall", group: "学习过程", title: "间隔回忆与求助", prompt: "隔几天能否回忆方法，说清卡点？")
     ]
+}
+
+struct AITiming: Codable {
+    var preparation: Double?
+    var ocr: Double?
+    var connection: Double?
+    var upload: Double?
+    var wait: Double?
+    var receive: Double?
+    var parse: Double?
+    mutating func merge(_ value: Self) {
+        preparation = value.preparation ?? preparation; ocr = value.ocr ?? ocr
+        connection = value.connection ?? connection; upload = value.upload ?? upload
+        wait = value.wait ?? wait; receive = value.receive ?? receive
+        if let parsed = value.parse { parse = (parse ?? 0) + parsed }
+    }
+    var summary: String {
+        let values: [(String, Double?)] = [("压缩", preparation), ("OCR", ocr), ("连接", connection), ("上传", upload), ("等待响应", wait), ("接收", receive), ("解析", parse)]
+        return " " + values.compactMap { name, seconds in seconds.map { name + String(format: " %.1f 秒", $0) } }.joined(separator: " · ")
+    }
 }

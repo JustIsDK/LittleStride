@@ -188,7 +188,7 @@ struct AISettingsView: View {
                 }
             }
             if connectionMode == "key" { Section("保存与检测") {
-                Button { save() } label: {
+                Button { busy = true; Task { _ = await save(); busy = false } } label: {
                     HStack {
                         Label(saveFeedback ? "已保存" : "保存连接配置", systemImage: saveFeedback ? "checkmark.circle.fill" : "square.and.arrow.down")
                         Spacer()
@@ -210,23 +210,14 @@ struct AISettingsView: View {
                 Text("此检测会实际访问配置的服务并可能产生费用；图片能力需在照片分析时验证。不自动切换服务商。").font(.caption).foregroundStyle(.secondary)
                 if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save("", account: store.data.ai.keyAccount); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy) }
             } }
-        }.navigationTitle("AI 服务设置").stridePage().onAppear {
+        }.navigationTitle("AI 服务设置").stridePage().disabled(busy).onAppear {
             provider = AIProvider(rawValue: store.data.ai.provider ?? "custom") ?? .custom
-            migrateKey(); refreshKeyStatus()
+            refreshKeyStatus()
         }
         .onChange(of: store.data.ai.baseURL) { refreshKeyStatus() }
         .onDisappear { key = ""; saveFeedbackTask?.cancel(); store.save() }
     }
     private func refreshKeyStatus() { keyPresent = !SecretStore.load(configuration: store.data.ai).isEmpty }
-    private func migrateKey() {
-        guard store.data.ai.credentialScope == nil else { return }
-        do {
-            let legacy = SecretStore.load()
-            if !legacy.isEmpty && !store.data.ai.baseURL.isEmpty { try SecretStore.save(legacy, account: store.data.ai.keyAccount) }
-            store.data.ai.credentialScope = store.data.ai.keyAccount
-            store.save()
-        } catch { store.error = error.localizedDescription }
-    }
     private func applyProvider() {
         key = ""; store.data.ai.provider = provider.rawValue
         store.data.ai.baseURL = provider.baseURL; store.data.ai.api = provider.api
@@ -236,12 +227,12 @@ struct AISettingsView: View {
         store.data.ai.credentialScope = store.data.ai.keyAccount
         refreshKeyStatus(); testResult = "推荐地址与协议已填入；请填写模型 ID 和该服务地址的 Key。"
     }
-    @discardableResult private func save() -> Bool {
+    @discardableResult private func save() async -> Bool {
         do {
             _ = try AIService(configuration: store.data.ai).endpoint()
             if !key.isEmpty { try SecretStore.save(key.trimmingCharacters(in: .whitespacesAndNewlines), account: store.data.ai.keyAccount); key = "" }
             store.data.ai.credentialScope = store.data.ai.keyAccount
-            refreshKeyStatus(); store.save(); testResult = "配置已保存，尚未检测当前连接。"
+            refreshKeyStatus(); guard await store.confirm({}) else { return false }; testResult = "配置已保存，尚未检测当前连接。"
             saveFeedback = true
             saveFeedbackTask?.cancel()
             saveFeedbackTask = Task {
@@ -252,7 +243,7 @@ struct AISettingsView: View {
         } catch { store.error = error.localizedDescription; return false }
     }
     private func test() async {
-        defer { busy = false }; guard save() else { return }
+        defer { busy = false }; guard await save() else { return }
         struct Probe: Codable { var ok: Bool }
         do {
             let result = try await AIService(configuration: store.data.ai).decode(Probe.self, prompt: "连接测试，只返回 {\"ok\":true}。")
@@ -270,7 +261,7 @@ struct SettingsView: View {
                 Toggle("开启通知", isOn: $store.data.reminder)
                 Stepper("\(store.data.reminderHour) 时", value: $store.data.reminderHour, in: 0...23)
                 Stepper("\(store.data.reminderMinute) 分", value: $store.data.reminderMinute, in: 0...59)
-                Button("保存并申请通知权限") { store.save(); Task { await ReminderService.update(store) } }
+                Button("保存并申请通知权限") { Task { if await store.confirm({}) { await ReminderService.update(store) } } }
                 Text("每天通知打开当前计划。iOS 后台不保证每天动态计算题量，因此通知不携带可能过期的题目摘要。").font(.caption)
             }
         }.navigationTitle("服务与计划设置").stridePage()
@@ -283,12 +274,14 @@ struct DataSettingsView: View {
     @State private var incoming: Data?
     @State private var confirmRestore = false
     @State private var busy = false
+    @State private var cacheStatus = ""
+    @State private var confirmClear = false
     @State private var cloudStatus = "尚未检查 iCloud 可用性"
     var body: some View {
         Form {
             Section("完整本地备份") {
                 Text("结构化 JSON 包含题目、知识点、作答、计划、奖励和已保存照片；不包含 API Key。")
-                Button("导出备份 / 保存到文件") { do { share = SharePayload(items: [try store.backup()]) } catch { store.error = error.localizedDescription } }
+                Button("导出备份 / 保存到文件") { Task { busy = true; defer { busy = false }; do { share = SharePayload(items: [try await store.backup()]) } catch { store.error = error.localizedDescription } } }.disabled(busy)
                 Button("选择备份文件恢复") { importer = true }
                 Text("恢复将替换本机数据，操作前自动保存一份旧数据快照。跨 App 使用仍需对方支持此格式。").font(.caption)
             }
@@ -298,7 +291,21 @@ struct DataSettingsView: View {
                 Button("从 iCloud 读取最近备份") { Task { await download() } }.disabled(busy)
                 Text("此版本提供手动云端快照与恢复。自动多设备同步和冲突合并尚未开启。需要签名时配置 iCloud 容器；不可用时会明确报错。").font(.caption)
             }
-        }.navigationTitle("数据与恢复").stridePage()
+            Section("本地缓存") {
+                Text(cacheStatus).font(.caption)
+                Button("清理缓存") { confirmClear = true }.disabled(busy)
+                Text("清除无引用照片和超过 1 小时的导出文件。题目、练习单、当前拍照草稿及恢复快照使用的照片会保留，最近分享的文件也会保留。").font(.caption).foregroundStyle(.secondary)
+            }
+        }.navigationTitle("数据与恢复").stridePage().task { await refreshCache() }
+        .disabled(busy)
+        .confirmationDialog("清理可释放的缓存？学习记录和引用照片会保留。", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清理缓存", role: .destructive) { Task {
+                busy = true; defer { busy = false }
+                do { let freed = try await store.clearCache(); await refreshCache(); store.notice = "已释放 " + ByteCountFormatter.string(fromByteCount: freed, countStyle: .file) }
+                catch { store.error = error.localizedDescription }
+            } }
+            Button("取消", role: .cancel) {}
+        }
         .sheet(item: $share) { SystemShare(items: $0.items) }
         .fileImporter(isPresented: $importer, allowedContentTypes: [.json]) { result in
             do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; incoming = try Data(contentsOf: url); confirmRestore = true }
@@ -306,15 +313,22 @@ struct DataSettingsView: View {
         }
         .confirmationDialog("确认替换本机数据？", isPresented: $confirmRestore, titleVisibility: .visible) {
             Button("保存旧快照并恢复", role: .destructive) {
-                do { _ = try store.backup(); if let incoming { try store.restore(incoming); store.notice = "数据已恢复。API Key 仍使用本机设置。" } }
-                catch { store.error = error.localizedDescription }; incoming = nil
+                Task {
+                    busy = true; defer { busy = false; incoming = nil }
+                    do { if let incoming { try await store.restore(incoming); store.notice = "数据已恢复。AI 服务地址和 Key 保留本机设置。"; await refreshCache() } }
+                    catch { store.error = error.localizedDescription }
+                }
             }
             Button("取消", role: .cancel) { incoming = nil }
         }
     }
+    private func refreshCache() async {
+        do { cacheStatus = "可清理：" + ByteCountFormatter.string(fromByteCount: try await store.cacheSize(), countStyle: .file) }
+        catch { cacheStatus = "暂时无法读取缓存：" + error.localizedDescription }
+    }
     private func upload() async {
         busy = true; defer { busy = false }
-        do { try await CloudSnapshots.upload(JSONEncoder().encode(store.data)); cloudStatus = "备份已写入 iCloud Drive 本地容器，系统负责上传。\(Date().formatted(date: .abbreviated, time: .shortened))" }
+        do { try await CloudSnapshots.upload(try await store.backupBytes()); cloudStatus = "备份已写入 iCloud Drive 本地容器，系统负责上传。\(Date().formatted(date: .abbreviated, time: .shortened))" }
         catch { cloudStatus = error.localizedDescription }
     }
     private func download() async {

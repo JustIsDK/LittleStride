@@ -3,6 +3,7 @@ import UIKit
 import AVFoundation
 import UserNotifications
 import UniformTypeIdentifiers
+import CoreText
 
 struct CameraPicker: UIViewControllerRepresentable {
     var onImage: (UIImage) -> Void
@@ -131,7 +132,16 @@ final class CaptureCameraController: UIViewController, AVCapturePhotoCaptureDele
 }
 struct SystemShare: UIViewControllerRepresentable {
     let items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
+    final class Coordinator { var files: [URL] = [] }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        context.coordinator.files = items.compactMap { $0 as? URL }
+        AppCache.pinned.formUnion(context.coordinator.files)
+        return UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    static func dismantleUIViewController(_ controller: UIActivityViewController, coordinator: Coordinator) {
+        AppCache.pinned.subtract(coordinator.files)
+    }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 struct SharePayload: Identifiable { let id = UUID(); var items: [Any] }
@@ -149,19 +159,39 @@ enum SheetRenderer {
             }
             page()
             for (index, q) in sheet.questions.enumerated() {
-                let text = "\(index + 1). [\(q.subject.rawValue)] \(q.text)" as NSString
-                let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 15)]
-                let height = text.boundingRect(with: CGSize(width: 520, height: 10000), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes, context: nil).height
-                if y + height + 110 > 790 { page() }
-                text.draw(in: CGRect(x: 36, y: y, width: 520, height: height + 5), withAttributes: attributes)
-                y += height + 110
+                let text = NSAttributedString(string: "\(index + 1). [\(q.subject.rawValue)] \(q.text)", attributes: [.font: UIFont.systemFont(ofSize: 15)])
+                let framesetter = CTFramesetterCreateWithAttributedString(text)
+                let height = CTFramesetterSuggestFrameSizeWithConstraints(framesetter, CFRange(location: 0, length: text.length), nil, CGSize(width: 520, height: CGFloat.greatestFiniteMagnitude), nil).height
+                if height + 110 <= 685 && y + height + 110 > 790 { page() }
+                var offset = 0
+                while offset < text.length {
+                    if y >= 765 { page() }
+                    let available = 790 - y
+                    let path = CGPath(rect: CGRect(x: 36, y: 842 - y - available, width: 520, height: available), transform: nil)
+                    let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: 0), path, nil)
+                    let visible = CTFrameGetVisibleStringRange(frame)
+                    guard visible.length > 0 else { page(); continue }
+                    let cg = context.cgContext
+                    cg.saveGState(); cg.textMatrix = .identity
+                    cg.translateBy(x: 0, y: 842); cg.scaleBy(x: 1, y: -1)
+                    CTFrameDraw(frame, cg); cg.restoreGState()
+                    offset += visible.length
+                    if offset < text.length { page() }
+                    else {
+                        let lastHeight = CTFramesetterSuggestFrameSizeWithConstraints(framesetter, visible, nil, CGSize(width: 520, height: CGFloat.greatestFiniteMagnitude), nil).height
+                        y += ceil(lastHeight) + 10
+                    }
+                }
+                if y + 100 > 790 { page() }
+                y += 100
             }
         }
-        let url = URL.temporaryDirectory.appendingPathComponent("\(sheet.code).pdf"); try bytes.write(to: url); return url
+        let url = try AppCache.file(name: "\(sheet.code)-\(UUID()).pdf"); try bytes.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen]); return url
     }
     @MainActor static func printPDF(_ url: URL) {
         let vc = UIPrintInteractionController.shared
         let info = UIPrintInfo(dictionary: nil); info.jobName = "LittleStride 练习单"; info.outputType = .general
+        AppCache.pinned.insert(url)
         vc.printInfo = info; vc.printingItem = url; vc.present(animated: true)
     }
 }
