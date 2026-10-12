@@ -75,11 +75,11 @@ private struct StridePressSurface<Label: View>: View {
         label
             .padding(.horizontal, fullWidth ? 16 : 0)
             .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: fullWidth ? 56 : 44, alignment: .leading)
-            .background(fullWidth ? (highlighted && enabled ? StrideStyle.green.opacity(0.22) : StrideStyle.pale) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .background(fullWidth && highlighted && enabled ? StrideStyle.green.opacity(0.16) : Color.clear)
             .contentShape(Rectangle())
-            .brightness(highlighted && enabled ? -0.08 : 0)
-            .opacity(enabled ? (highlighted ? 0.85 : 1) : 0.45)
-            .scaleEffect(highlighted && enabled && !reduceMotion ? 0.95 : 1)
+            .brightness(!fullWidth && highlighted && enabled ? -0.08 : 0)
+            .opacity(enabled ? (!fullWidth && highlighted ? 0.85 : 1) : 0.45)
+            .scaleEffect(!fullWidth && highlighted && enabled && !reduceMotion ? 0.95 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: highlighted ? 0.06 : 0.2), value: highlighted)
             .onChange(of: pressed) { if pressed && enabled { highlighted = true } }
             .task(id: pressed) {
