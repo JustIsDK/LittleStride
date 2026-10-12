@@ -84,21 +84,115 @@ struct AIService {
             // No remote response body or credential is surfaced in diagnostic logs.
             throw ServiceFailure(message: "HTTP \(http.statusCode) · \(url.path)\n\(suggestion)")
         }
-        guard let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw ServiceFailure(message: "返回不是有效 JSON。") }
-        if configuration.api == "Responses" {
-            if let text = root["output_text"] as? String, !text.isEmpty { return text }
-            let output = root["output"] as? [[String: Any]] ?? []
-            let text = output.flatMap { $0["content"] as? [[String: Any]] ?? [] }.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        return try Self.responseText(bytes, contentType: http.value(forHTTPHeaderField: "Content-Type") ?? "")
+    }
+    // 部分兼容服务忽略 stream:false，仍返回 SSE。两种协议均在这里解析。
+    static func responseText(_ bytes: Data, contentType: String) throws -> String {
+        let raw = String(data: bytes, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { throw ServiceFailure(message: "AI 服务返回了空响应，请检查服务商连接或稍后重试。") }
+        if contentType.lowercased().contains("text/event-stream") || raw.hasPrefix("data:") || raw.hasPrefix("event:") || raw.hasPrefix(":") {
+            return try streamText(raw)
+        }
+        let root: [String: Any]
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+                throw ServiceFailure(message: "AI 服务响应应为 JSON 对象，请检查接口协议与基础地址。")
+            }
+            root = object
+        } catch let error as ServiceFailure { throw error }
+        catch {
+            throw ServiceFailure(message: "无法解析 AI 服务响应：返回内容不是有效 JSON 或支持的流式数据。请检查 AI 设置中的接口协议与基础地址。")
+        }
+        try validateResponse(root)
+        guard let text = outputText(root), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ServiceFailure(message: "AI 服务响应中没有可用文本。请确认所选模型支持图片分析，以及接口协议与服务商一致。")
+        }
+        return text
+    }
+    private static func validateResponse(_ root: [String: Any]) throws {
+        if root["error"] != nil && !(root["error"] is NSNull) || ["error", "response.failed"].contains(root["type"] as? String ?? "") || root["status"] as? String == "failed" {
+            throw ServiceFailure(message: "AI 服务返回处理错误。请检查模型的图片能力、服务额度和接口配置。")
+        }
+        if root["status"] as? String == "incomplete" || root["type"] as? String == "response.incomplete" {
+            throw ServiceFailure(message: "AI 分析结果被截断，未写入题库。请缩小照片范围后重试，或调整服务商的输出限制。")
+        }
+        if let choices = root["choices"] as? [[String: Any]], choices.first?["finish_reason"] as? String == "length" {
+            throw ServiceFailure(message: "AI 分析结果被截断，未写入题库。请缩小照片范围后重试。")
+        }
+    }
+    private static func contentText(_ content: Any?) -> String? {
+        if let text = content as? String { return text }
+        guard let parts = content as? [[String: Any]] else { return nil }
+        let text = parts.filter { ["text", "output_text"].contains($0["type"] as? String ?? "") }
+            .compactMap { $0["text"] as? String }.joined()
+        return text.isEmpty ? nil : text
+    }
+    private static func outputText(_ root: [String: Any]) -> String? {
+        if let text = root["output_text"] as? String, !text.isEmpty { return text }
+        if let output = root["output"] as? [[String: Any]] {
+            let text = output.compactMap { contentText($0["content"]) }.joined(separator: "\n")
             if !text.isEmpty { return text }
-        } else if let choices = root["choices"] as? [[String: Any]], let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String { return text }
-        throw ServiceFailure(message: "服务返回格式不兼容，或没有可用文本结果。")
+        }
+        if let choices = root["choices"] as? [[String: Any]], let message = choices.first?["message"] as? [String: Any] {
+            return contentText(message["content"])
+        }
+        return nil
+    }
+    private static func streamText(_ raw: String) throws -> String {
+        var deltas = "", finalText: String?, terminated = false
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        for event in normalized.components(separatedBy: "\n\n") {
+            let payload = event.components(separatedBy: "\n").filter { $0.hasPrefix("data:") }
+                .map { String($0.dropFirst(5)).trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
+            if payload.isEmpty { continue }
+            if payload == "[DONE]" { terminated = true; continue }
+            guard let data = payload.data(using: .utf8), let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                throw ServiceFailure(message: "AI 服务返回的流式数据格式无效，请检查服务商兼容性。")
+            }
+            try validateResponse(root)
+            let type = root["type"] as? String ?? ""
+            if type == "response.output_text.delta", let delta = root["delta"] as? String { deltas += delta }
+            if type == "response.output_text.done", let text = root["text"] as? String { finalText = text }
+            if type == "response.completed" {
+                terminated = true
+                if let response = root["response"] as? [String: Any] {
+                    try validateResponse(response)
+                    if let text = outputText(response) { finalText = text }
+                }
+            }
+            if let choices = root["choices"] as? [[String: Any]], let choice = choices.first {
+                if let delta = choice["delta"] as? [String: Any], let text = contentText(delta["content"]) { deltas += text }
+                if let text = outputText(root) { finalText = text }
+                if choice["finish_reason"] as? String == "stop" { terminated = true }
+            }
+        }
+        guard terminated else { throw ServiceFailure(message: "AI 流式响应未完整结束，未写入题库。请重试或检查服务商连接。") }
+        let text = finalText ?? deltas
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ServiceFailure(message: "AI 流式响应中没有分析文本，请确认模型支持图片分析。")
+        }
+        return text
     }
     func decode<T: Decodable>(_ type: T.Type, prompt: String, image: Data? = nil) async throws -> T {
-        let response = try await call(prompt: prompt + "\n只输出一个JSON对象，不要Markdown或额外说明。", image: image)
+        let response = try await call(prompt: prompt + "\n只输出一个JSON对象，不要Markdown或额外说明。示例中的所有字段必须保留，字符串未知时用空字符串，不要用null。", image: image)
         var text = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.hasPrefix("```") { text = text.components(separatedBy: "\n").dropFirst().dropLast().joined(separator: "\n") }
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        if text.hasPrefix("```"), let firstLine = text.firstIndex(of: "\n"), let closing = text.range(of: "```", options: .backwards), closing.lowerBound > firstLine {
+            text = String(text[text.index(after: firstLine)..<closing.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         do { return try JSONDecoder().decode(type, from: Data(text.utf8)) }
-        catch { throw ServiceFailure(message: "模型结果未通过结构校验，未写入题库。可更换模型或重试。") }
+        catch let error as DecodingError {
+            let detail: String
+            switch error {
+            case .keyNotFound(let key, _): detail = "缺少字段 \(key.stringValue)"
+            case .typeMismatch(_, let context): detail = "字段 \(context.codingPath.map(\.stringValue).joined(separator: ".")) 的类型不正确"
+            case .valueNotFound(_, let context): detail = "字段 \(context.codingPath.map(\.stringValue).joined(separator: ".")) 不应为 null"
+            case .dataCorrupted: detail = "模型分析文本不是有效 JSON，可能带有额外说明或结果不完整"
+            @unknown default: detail = "结构不符合要求"
+            }
+            throw ServiceFailure(message: "已收到 AI 响应，但分析结果无法读取：\(detail)。未写入题库，请重试或更换模型。")
+        }
+        catch { throw ServiceFailure(message: "已收到 AI 响应，但分析结果未通过结构校验，未写入题库。请重试或更换模型。") }
     }
     func analyze(image: Data, profile: ChildProfile) async throws -> AIAnalysis {
         let prompt = """
