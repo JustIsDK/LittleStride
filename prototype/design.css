@@ -11,3 +11,6 @@
 @media(max-width:360px){main{padding-left:18px;padding-right:18px}.top{padding-left:18px;padding-right:18px}.demo{margin-left:18px;margin-right:18px}.brand{font-size:18px;gap:7px}.home-intro h1{font-size:25px}.summary-main{gap:10px}.duration strong{font-size:57px}.actions{flex-wrap:wrap}.actions>.button{flex-basis:135px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 @media print{body{background:white}.shell,.toast{display:none!important}#printArea{display:block;padding:12mm;font-family:serif;color:#000}.printq{margin-top:12mm;page-break-inside:avoid;line-height:1.8}.printq .answer-space{height:25mm}@page{size:A4;margin:12mm}}
+
+/* Shared LittleStride brand mark, independent of the interface theme. */
+.brand-mark{display:block;width:33px;height:33px;border-radius:9px;flex:none}

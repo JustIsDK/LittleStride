@@ -148,9 +148,8 @@ struct TodayView: View {
     private var header: some View {
         HStack(spacing: 10) {
             HStack(spacing: 9) {
-                Image(systemName: "arrow.up.right").font(.subheadline.bold())
-                    .foregroundStyle(StrideStyle.onAccent).frame(width: 32, height: 32)
-                    .background(StrideStyle.green, in: RoundedRectangle(cornerRadius: 10))
+                Image("BrandMark").resizable().frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 9)).accessibilityHidden(true)
                 Text("LittleStride").font(.system(size: 20, weight: .bold)).tracking(-0.6)
             }.foregroundStyle(StrideStyle.ink).accessibilityElement(children: .combine)
             Spacer(minLength: 3)
