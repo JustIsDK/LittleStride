@@ -87,6 +87,6 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
 
 ## CloudKit 共享档案
 
-工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要在 Apple Developer / CloudKit Console 创建同名 Container、开启 CloudKit capability，并在 Xcode 设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。
+工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录（默认不强制开启签名 capability，以便个人开发团队仍能编译）：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要使用支持 iCloud capability 的 Apple Developer 付费团队，在 Apple Developer / CloudKit Console 创建同名 Container，然后在 Xcode 的 Signing & Capabilities 添加 iCloud/CloudKit，并设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。个人开发团队不支持该 capability，运行时会提示 CloudKit 不可用，但不影响本地题库和 iCloud Drive 备份功能。
 
 当前版本完成了共享档案创建、更新和邀请面板；数据仍按整份快照写入，冲突策略暂定为最后一次有效快照覆盖，尚未做题目级别的增量合并。被邀请手机接受分享后的自动接收回调和后台持续同步仍需下一步接入，不能把现有 iCloud Drive 快照按钮当成 CloudKit 自动同步。
