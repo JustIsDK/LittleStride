@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import ImageIO
+import Vision
 
 struct QuestionEditorView: View {
     @Environment(LearningStore.self) private var store
@@ -56,6 +57,18 @@ struct QuestionEditorView: View {
         .onAppear { if editing, let w = store.weakness(question.weaknessID) { knowledge = w.title } }
     }
 }
+private struct CaptureDraft {
+    var image: UIImage?
+    var bytes: Data?
+    var imageID: UUID?
+    var results: [AIQuestion] = []
+    var textbook: TextbookAnalysis?
+    var finished = false
+    var summary = ""
+    var text = ""
+    var textOnly = false
+    var textChecked = false
+}
 struct CaptureView: View {
     @Environment(LearningStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -79,6 +92,10 @@ struct CaptureView: View {
     @State private var results: [AIQuestion] = []
     @State private var imageID: UUID?
     @State private var textbook: TextbookAnalysis?
+    @State private var drafts: [String: CaptureDraft] = [:]
+    @State private var recognizedText = ""
+    @State private var textOnly = false
+    @State private var textChecked = false
     var body: some View {
         ScrollViewReader { proxy in ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -93,7 +110,7 @@ struct CaptureView: View {
                 } else {
                     StrideCard {
                         if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260) }
-                        else if preparing { SwiftUI.ProgressView("正在准备照片…").frame(maxWidth: .infinity).padding(25) }
+                        else if preparing { SwiftUI.ProgressView("正在压缩并识别文字…").frame(maxWidth: .infinity).padding(25) }
                         else { Image(systemName: "camera.viewfinder").font(.system(size: 50)).foregroundStyle(StrideStyle.green).frame(maxWidth: .infinity).padding(25) }
                         HStack {
                             Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "此设备没有可用相机，请从相册选择。" } }.buttonStyle(StrideButtonStyle(secondary: true))
@@ -101,10 +118,22 @@ struct CaptureView: View {
                         }.disabled(busy || preparing)
                         Text(mode == "教材与进度" ? "可拍封面、版权页、目录或当前学习页。每次分析一张，确认后补充档案。" : "拍完整题干、作答和批改痕迹。看不清的内容不会自动确认。").font(.caption).foregroundStyle(.secondary)
                     }
+                    if imageBytes != nil {
+                        StrideCard {
+                            Toggle("只发送本地识别文字", isOn: $textOnly).disabled(recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                            Text("文字模式不上传图片，适合清晰印刷内容。手写答案、竖式、图形和批改痕迹可能丢失，需要保留时用图片模式。识别在本机完成。").font(.caption).foregroundStyle(.secondary)
+                            if textOnly {
+                                TextEditor(text: $recognizedText).frame(minHeight: 150).disabled(busy)
+                                Toggle("已核对题干与作答，文字足够完成本次分析", isOn: $textChecked).disabled(busy)
+                            } else {
+                                Text(recognizedText.isEmpty ? "未识别到可用文字，将使用压缩图片。" : "本地已识别文字，可切换文字模式核对。").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     NavigationLink("AI 配置与连接检查", destination: AISettingsView())
-                    Button(busy ? "分析中…" : analysisFinished ? "已分析完成 · 请核对下方结果" : "发送照片并分析") { startAnalysis() }.buttonStyle(StrideButtonStyle()).disabled(imageBytes == nil || busy || preparing || analysisFinished)
+                    Button(busy ? "分析中…" : analysisFinished ? "已分析完成 · 请核对下方结果" : textOnly ? "发送核对后的文字并分析" : "发送照片并分析") { startAnalysis() }.buttonStyle(StrideButtonStyle()).disabled(imageBytes == nil || busy || preparing || analysisFinished || (textOnly && (!textChecked || recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
                     if let imageBytes { Text("上传照片约 \(ByteCountFormatter.string(fromByteCount: Int64(imageBytes.count), countStyle: .file))，已在后台压缩。").font(.caption).foregroundStyle(.secondary) }
-                    Text("仅在点击分析后，照片发送至你配置的服务。失败保留照片，可重试。").font(.caption).foregroundStyle(.secondary)
+                    Text(textOnly ? "本次只发送你核对后的文字，不发送照片。" : "仅在点击分析后，压缩照片发送至你配置的服务。失败保留照片，可重试。").font(.caption).foregroundStyle(.secondary)
                     if analysisFinished {
                         StrideCard {
                             Label("分析完成", systemImage: "checkmark.circle.fill").font(.headline).foregroundStyle(StrideStyle.green)
@@ -135,18 +164,26 @@ struct CaptureView: View {
         }
         .sheet(isPresented: $camera) { CameraPicker { selected in Task { await preparePhoto(image: selected) } } }
         .onChange(of: picker) {
-            let selection = picker
+            guard let selection = picker else { return }
             Task {
                 preparing = true
-                if let bytes = try? await selection?.loadTransferable(type: Data.self) { await preparePhoto(data: bytes) }
+                if let bytes = try? await selection.loadTransferable(type: Data.self) { await preparePhoto(data: bytes) }
                 else { preparing = false; store.error = "无法读取所选照片，请重试。" }
             }
         }
-        .onChange(of: mode) { results = []; textbook = nil; analysisFinished = false; analysisSummary = "" }
+        .onChange(of: mode) { oldMode, newMode in
+            drafts[oldMode] = CaptureDraft(image: image, bytes: imageBytes, imageID: imageID, results: results, textbook: textbook, finished: analysisFinished, summary: analysisSummary, text: recognizedText, textOnly: textOnly, textChecked: textChecked)
+            let draft = drafts[newMode] ?? CaptureDraft()
+            image = draft.image; imageBytes = draft.bytes; imageID = draft.imageID
+            results = draft.results; textbook = draft.textbook; analysisFinished = draft.finished; analysisSummary = draft.summary
+            recognizedText = draft.text; textOnly = draft.textOnly; textChecked = draft.textChecked
+            photoRevision = UUID(); picker = nil; analysisError = nil; analysisDialog = false
+        }
+        .onChange(of: recognizedText) { textChecked = false }
         .onDisappear { analysisTask?.cancel() }
     }
     private func startAnalysis(retry: Bool = false) {
-        guard !busy, !preparing, imageBytes != nil, !analysisFinished || retry else { return }
+        guard !busy, !preparing, imageBytes != nil, !analysisFinished || retry, !textOnly || (textChecked && !recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { return }
         busy = true; analysisFinished = false; analysisSummary = ""; analysisError = nil; analysisDialog = true
         analysisStarted = Date(); analysisStage = "准备请求…"
         analysisTask = Task { await analyze() }
@@ -159,15 +196,16 @@ struct CaptureView: View {
             let service = AIService(configuration: store.data.ai)
             let progress: @Sendable (String) -> Void = { stage in Task { @MainActor in if busy { analysisStage = stage } } }
             if mode == "教材与进度" {
-                let result = try await service.textbook(image: bytes, progress: progress)
+                let result = try await service.textbook(image: textOnly ? nil : bytes, text: textOnly ? recognizedText : nil, progress: progress)
                 try Task.checkCancellation(); textbook = result
                 analysisSummary = "教材信息已识别，请核对后更新孩子档案。"
             } else {
-                let response = try await service.analyze(image: bytes, profile: store.data.profile, progress: progress)
+                let response = try await service.analyze(image: textOnly ? nil : bytes, profile: store.data.profile, text: textOnly ? recognizedText : nil, progress: progress)
                 try Task.checkCancellation()
                 results = response.questions.filter { !$0.text.isEmpty && Subject(rawValue: $0.subject) != nil && ["错误", "部分正确", "待核实"].contains($0.status) }
                 analysisSummary = results.isEmpty ? "未识别到可收录错题，未新增题量。可检查照片清晰度和批改痕迹。" : "识别到 \(results.count) 道待核对题目，本次尚未入库。"
             }
+            analysisSummary += " 分析耗时 \(Int(Date().timeIntervalSince(analysisStarted))) 秒（\(textOnly ? "文字" : "图片")模式）。"
             analysisFinished = true
             try await Task.sleep(for: .seconds(2))
             analysisDialog = false
@@ -178,20 +216,42 @@ struct CaptureView: View {
     }
     private func preparePhoto(image selected: UIImage? = nil, data: Data? = nil) async {
         let revision = UUID(); photoRevision = revision
-        preparing = true; image = nil; imageBytes = nil; results = []; textbook = nil; imageID = nil; analysisFinished = false; analysisSummary = ""
+        preparing = true; recognizedText = ""; textOnly = false; textChecked = false; image = nil; imageBytes = nil; results = []; textbook = nil; imageID = nil; analysisFinished = false; analysisSummary = ""
         let prepared = if let selected { await PhotoPreparation.prepare(image: selected) }
             else if let data { await PhotoPreparation.prepare(data: data) } else { nil as PreparedPhoto? }
         guard revision == photoRevision else { return }
         preparing = false
         guard let prepared else { store.error = "照片处理失败，请重新拍照或选择照片。"; return }
-        image = prepared.preview; imageBytes = prepared.jpeg
+        image = prepared.preview; imageBytes = prepared.jpeg; recognizedText = prepared.text
     }
 }
 struct PreparedPhoto {
     let preview: UIImage
     let jpeg: Data
+    let text: String
 }
 enum PhotoPreparation {
+    private nonisolated static func finish(_ preview: UIImage) -> PreparedPhoto? {
+        var quality: CGFloat = 0.75
+        guard var jpeg = preview.jpegData(compressionQuality: quality) else { return nil }
+        while jpeg.count > 900_000 && quality > 0.45 {
+            quality -= 0.1
+            guard let smaller = preview.jpegData(compressionQuality: quality) else { break }
+            jpeg = smaller
+        }
+        var text = ""
+        if let cgImage = preview.cgImage {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["zh-Hans", "en-US"]
+            request.usesLanguageCorrection = false
+            do {
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+                text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            } catch { /* Image mode remains available when local OCR fails. */ }
+        }
+        return PreparedPhoto(preview: preview, jpeg: jpeg, text: text)
+    }
     nonisolated static func prepare(image: UIImage) async -> PreparedPhoto? {
         await Task.detached(priority: .userInitiated) {
             autoreleasepool {
@@ -203,8 +263,7 @@ enum PhotoPreparation {
                     UIColor.white.setFill(); context.fill(CGRect(origin: .zero, size: target))
                     image.draw(in: CGRect(origin: .zero, size: target))
                 }
-                guard let jpeg = preview.jpegData(compressionQuality: 0.75) else { return nil }
-                return PreparedPhoto(preview: preview, jpeg: jpeg)
+                return finish(preview)
             }
         }.value
     }
@@ -219,8 +278,7 @@ enum PhotoPreparation {
                         kCGImageSourceShouldCacheImmediately: true
                       ] as CFDictionary) else { return nil }
                 let preview = UIImage(cgImage: thumbnail)
-                guard let jpeg = preview.jpegData(compressionQuality: 0.75) else { return nil }
-                return PreparedPhoto(preview: preview, jpeg: jpeg)
+                return finish(preview)
             }
         }.value
     }

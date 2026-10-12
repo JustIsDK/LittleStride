@@ -105,6 +105,8 @@ struct AISettingsView: View {
     @State private var keyPresent = false
     @State private var busy = false
     @State private var testResult = "尚未检测"
+    @State private var saveFeedback = false
+    @State private var saveFeedbackTask: Task<Void, Never>?
     @State private var connectionMode = "key"
     @State private var provider: AIProvider = .custom
     var body: some View {
@@ -125,7 +127,7 @@ struct AISettingsView: View {
                 Text(provider.guide).font(.caption).foregroundStyle(.secondary)
                 if let url = provider.consoleURL { Link("登录 \(provider.name) 控制台 / 获取 API Key ↗", destination: url) }
                 if connectionMode == "key" && provider != .custom {
-                    Button("填入该服务商的推荐参数") { applyProvider() }
+                    Button("填入该服务商的推荐参数") { applyProvider() }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets())
                     Text("会替换地址与协议并清空模型输入。每个服务地址的密钥分开保存；切换不会把旧服务的 Key 发给新服务。模型 ID 请按控制台填写。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -138,7 +140,7 @@ struct AISettingsView: View {
                     if provider == .openai {
                         Link("OpenAI 账号授权官方说明 ↗", destination: URL(string: "https://developers.openai.com/siwc/token-sharing-open-source/sign-in")!)
                     }
-                    Button("改用 API Key 接入") { connectionMode = "key" }
+                    Button("改用 API Key 接入") { connectionMode = "key" }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets())
                 }
             } else {
                 Section("连接参数") {
@@ -186,18 +188,34 @@ struct AISettingsView: View {
                 }
             }
             if connectionMode == "key" { Section("保存与检测") {
-                Button("保存连接配置") { save() }
-                Button(busy ? "检测中…" : "检测文本与结构化输出") { Task { await test() } }.disabled(busy)
+                Button { save() } label: {
+                    HStack {
+                        Label(saveFeedback ? "已保存" : "保存连接配置", systemImage: saveFeedback ? "checkmark.circle.fill" : "square.and.arrow.down")
+                        Spacer()
+                    }
+                }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy)
+                Button {
+                    guard !busy else { return }
+                    busy = true
+                    Task { await test() }
+                } label: {
+                    HStack {
+                        if busy { SwiftUI.ProgressView().tint(StrideStyle.green) }
+                        else { Image(systemName: "network") }
+                        Text(busy ? "正在检测连接…" : "检测文本与结构化输出")
+                        Spacer()
+                    }
+                }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy)
                 Text(testResult).font(.caption).textSelection(.enabled)
                 Text("此检测会实际访问配置的服务并可能产生费用；图片能力需在照片分析时验证。不自动切换服务商。").font(.caption).foregroundStyle(.secondary)
-                if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save("", account: store.data.ai.keyAccount); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } } }
+                if keyPresent { Button("删除本机 Key", role: .destructive) { do { try SecretStore.save("", account: store.data.ai.keyAccount); keyPresent = false; key = "" } catch { store.error = error.localizedDescription } }.buttonStyle(StridePressStyle(fullWidth: true)).listRowInsets(EdgeInsets()).disabled(busy) }
             } }
-        }.buttonStyle(StridePressStyle(fullWidth: true)).navigationTitle("AI 服务设置").stridePage().onAppear {
+        }.navigationTitle("AI 服务设置").stridePage().onAppear {
             provider = AIProvider(rawValue: store.data.ai.provider ?? "custom") ?? .custom
             migrateKey(); refreshKeyStatus()
         }
         .onChange(of: store.data.ai.baseURL) { refreshKeyStatus() }
-        .onDisappear { key = ""; store.save() }
+        .onDisappear { key = ""; saveFeedbackTask?.cancel(); store.save() }
     }
     private func refreshKeyStatus() { keyPresent = !SecretStore.load(configuration: store.data.ai).isEmpty }
     private func migrateKey() {
@@ -223,11 +241,18 @@ struct AISettingsView: View {
             _ = try AIService(configuration: store.data.ai).endpoint()
             if !key.isEmpty { try SecretStore.save(key.trimmingCharacters(in: .whitespacesAndNewlines), account: store.data.ai.keyAccount); key = "" }
             store.data.ai.credentialScope = store.data.ai.keyAccount
-            refreshKeyStatus(); store.save(); testResult = "配置已保存，尚未检测当前连接。"; return true
+            refreshKeyStatus(); store.save(); testResult = "配置已保存，尚未检测当前连接。"
+            saveFeedback = true
+            saveFeedbackTask?.cancel()
+            saveFeedbackTask = Task {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                saveFeedback = false
+            }
+            return true
         } catch { store.error = error.localizedDescription; return false }
     }
     private func test() async {
-        guard save() else { return }; busy = true; defer { busy = false }
+        defer { busy = false }; guard save() else { return }
         struct Probe: Codable { var ok: Bool }
         do {
             let result = try await AIService(configuration: store.data.ai).decode(Probe.self, prompt: "连接测试，只返回 {\"ok\":true}。")

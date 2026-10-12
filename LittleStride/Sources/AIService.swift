@@ -33,10 +33,11 @@ struct ServiceFailure: LocalizedError {
 }
 private final class AIUploadObserver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let progress: (@Sendable (String) -> Void)?
+    private let started = Date()
     init(progress: (@Sendable (String) -> Void)?) { self.progress = progress }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         if totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend {
-            progress?("照片已发送，等待 AI 分析…")
+            progress?("上传完成（\(Int(Date().timeIntervalSince(started))) 秒），等待 AI 分析…")
         } else if totalBytesExpectedToSend > 0 {
             progress?("正在上传：\(min(100, totalBytesSent * 100 / totalBytesExpectedToSend))%")
         }
@@ -232,17 +233,17 @@ struct AIService {
         }
         catch { throw ServiceFailure(message: "已收到 AI 响应，但分析结果未通过结构校验，未写入题库。请重试或更换模型。") }
     }
-    func analyze(image: Data, profile: ChildProfile, progress: (@Sendable (String) -> Void)? = nil) async throws -> AIAnalysis {
+    func analyze(image: Data?, profile: ChildProfile, text: String? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> AIAnalysis {
         let prompt = """
         分析小学作业照片。年级：\(profile.grade)，学期：\(profile.term)。教材信息：\(profile.textbooks)。
         找出错误、受助或无法判断的题目；不为正确题编造错误。不清楚的内容留空，status写待核实。
         区分观察事实和可能原因；不能从简单错误推断态度差。知识点只按证据归类。最多返回12题。
         JSON格式：{"questions":[{"subject":"数学/语文/英语","text":"完整题干","answer":"正确答案，无法判断留空","studentAnswer":"照片原始作答","knowledge":"具体知识点","observation":"可观察错误","possibleCause":"尚需确认的可能原因","status":"错误/部分正确/待核实"}]}
         """
-        return try await decode(AIAnalysis.self, prompt: prompt, image: image, progress: progress)
+        return try await decode(AIAnalysis.self, prompt: prompt + (text.map { "\n以下为用户核对的本地OCR文字（无图片，不能推断版面、批改痕迹或未提供的作答；无法判断时标待核实）：\n" + $0 } ?? ""), image: image, progress: progress)
     }
-    func textbook(image: Data, progress: (@Sendable (String) -> Void)? = nil) async throws -> TextbookAnalysis {
-        try await decode(TextbookAnalysis.self, prompt: "识别教材封面、版权页、目录或当前学习页。仅按照片取证，不补造出版社、版本、目录。不因拍到某页就推断已掌握。返回JSON：{\"subject\":\"数学/语文/英语或空\",\"title\":\"\",\"publisher\":\"\",\"edition\":\"\",\"grade\":\"\",\"term\":\"\",\"progress\":\"仅当前可见章节\",\"uncertainty\":\"需核实项\"}。", image: image, progress: progress)
+    func textbook(image: Data?, text: String? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> TextbookAnalysis {
+        try await decode(TextbookAnalysis.self, prompt: "识别教材封面、版权页、目录或当前学习页。仅按照片取证，不补造出版社、版本、目录。不因拍到某页就推断已掌握。返回JSON：{\"subject\":\"数学/语文/英语或空\",\"title\":\"\",\"publisher\":\"\",\"edition\":\"\",\"grade\":\"\",\"term\":\"\",\"progress\":\"仅当前可见章节\",\"uncertainty\":\"需核实项\"}。" + (text.map { "\n用户核对的OCR文字（无图片，缺失信息留空）：\n" + $0 } ?? ""), image: image, progress: progress)
     }
     func generate(_ q: Question, profile: ChildProfile) async throws -> AIAnalysis {
         try await decode(AIAnalysis.self, prompt: "为\(profile.grade)\(q.subject.rawValue)生成一道同类题。原题：\(q.text)，答案：\(q.answer)，解析：\(q.explanation)。保持知识点和难度，不拔高，核算答案。格式{\"questions\":[{\"subject\":\"\(q.subject.rawValue)\",\"text\":\"\",\"answer\":\"\",\"studentAnswer\":\"\",\"knowledge\":\"\",\"observation\":\"说明解法\",\"possibleCause\":\"\",\"status\":\"生成练习\"}]}。")

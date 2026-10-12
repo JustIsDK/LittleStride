@@ -33,6 +33,9 @@ struct RecordSheetView: View {
     @State private var picker: PhotosPickerItem?
     @State private var photo: UIImage?
     @State private var photoBytes: Data?
+    @State private var recognizedText = ""
+    @State private var textOnly = false
+    @State private var textChecked = false
     @State private var preparingPhoto = false
     @State private var camera = false
     @State private var busy = false
@@ -55,10 +58,18 @@ struct RecordSheetView: View {
                 if !sheet.completed {
                     Section("结果照片（可选）") {
                         if let photo { Image(uiImage: photo).resizable().scaledToFit().frame(maxHeight: 220) }
-                        if preparingPhoto { SwiftUI.ProgressView("正在准备照片…") }
+                        if preparingPhoto { SwiftUI.ProgressView("正在压缩并识别文字…") }
                         PhotosPicker("从相册选择", selection: $picker, matching: .images).disabled(busy || preparingPhoto)
                         Button("拍照") { if UIImagePickerController.isSourceTypeAvailable(.camera) { camera = true } else { store.error = "当前设备无相机，请选择相册。" } }.disabled(busy || preparingPhoto)
-                        Button(busy ? "识别中…" : analysisFinished ? "已识别完成 · 请核对结果" : "发送照片，AI 辅助批改") { startAnalysis(sheet) }.disabled(photoBytes == nil || busy || preparingPhoto || analysisFinished)
+                        if photoBytes != nil {
+                            Toggle("只发送本地识别文字", isOn: $textOnly).disabled(recognizedText.isEmpty || busy)
+                            Text("手写、竖式及图形可能识别不完整；文字模式不上传照片，请先核对。需要原始作答痕迹时用图片模式。").font(.caption)
+                            if textOnly {
+                                TextEditor(text: $recognizedText).frame(minHeight: 150).disabled(busy)
+                                Toggle("已核对识别文字与孩子作答", isOn: $textChecked).disabled(busy)
+                            }
+                        }
+                        Button(busy ? "识别中…" : analysisFinished ? "已识别完成 · 请核对结果" : textOnly ? "发送核对文字，AI 辅助批改" : "发送照片，AI 辅助批改") { startAnalysis(sheet) }.disabled(photoBytes == nil || busy || preparingPhoto || analysisFinished || (textOnly && (!textChecked || recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
                         if analysisFinished {
                             Label(analysisSummary, systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(StrideStyle.green)
                             Button("重新识别这张照片") { confirmRetry = true }.font(.caption)
@@ -97,14 +108,15 @@ struct RecordSheetView: View {
         .onAppear { if let sheet { for q in sheet.questions where drafts[q.id] == nil { drafts[q.id] = AttemptDraft() } } }
         .sheet(isPresented: $camera) { CameraPicker { image in Task { await preparePhoto(image: image) } } }
         .onChange(of: picker) {
-            let selection = picker
+            guard let selection = picker else { return }
             Task {
                 preparingPhoto = true
-                if let bytes = try? await selection?.loadTransferable(type: Data.self) { await preparePhoto(data: bytes) }
+                if let bytes = try? await selection.loadTransferable(type: Data.self) { await preparePhoto(data: bytes) }
                 else { preparingPhoto = false; store.error = "无法读取所选照片，请重试。" }
             }
         }
         .navigationDestination(isPresented: $shareResult) { ResultShareView(sheetID: sheetID) }
+        .onChange(of: recognizedText) { textChecked = false }
         .onDisappear { analysisTask?.cancel() }
         .sensoryFeedback(.success, trigger: analysisFinished) { _, finished in finished }
         .confirmationDialog("重新识别会再次发送照片，并可能产生费用。", isPresented: $confirmRetry, titleVisibility: .visible) {
@@ -116,7 +128,7 @@ struct RecordSheetView: View {
         Binding(get: { (drafts[id] ?? AttemptDraft())[keyPath: path] }, set: { var d = drafts[id] ?? AttemptDraft(); d[keyPath: path] = $0; drafts[id] = d; checked = false })
     }
     private func startAnalysis(_ sheet: PracticeSheet, retry: Bool = false) {
-        guard !busy, !preparingPhoto, photoBytes != nil, !analysisFinished || retry else { return }
+        guard !busy, !preparingPhoto, photoBytes != nil, !analysisFinished || retry, !textOnly || (textChecked && !recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { return }
         busy = true; analysisFinished = false; analysisSummary = ""; analysisError = nil; analysisDialog = true
         analysisStarted = Date(); analysisStage = "准备请求…"
         analysisTask = Task { await analyze(sheet) }
@@ -127,7 +139,7 @@ struct RecordSheetView: View {
         do {
             let mapping = sheet.questions.map { "\($0.id.uuidString): \($0.text)；参考答案：\($0.answer)" }.joined(separator: "\n")
             let progress: @Sendable (String) -> Void = { stage in Task { @MainActor in if busy { analysisStage = stage } } }
-            let result = try await AIService(configuration: store.data.ai).decode(AICheck.self, prompt: "核对照片中的练习结果。题目编号与参考：\n\(mapping)\n开放题允许合理不同表述。看不清或未作答不能判错误；帮助程度不能从照片推断。返回{\"results\":[{\"id\":\"原题UUID\",\"answer\":\"孩子答案\",\"result\":\"正确/部分正确/错误/未作答/无法判断\",\"observation\":\"可观察事实\"}]}。", image: bytes, progress: progress)
+            let result = try await AIService(configuration: store.data.ai).decode(AICheck.self, prompt: "核对照片中的练习结果。题目编号与参考：\n\(mapping)\n开放题允许合理不同表述。看不清或未作答不能判错误；帮助程度不能从照片推断。返回{\"results\":[{\"id\":\"原题UUID\",\"answer\":\"孩子答案\",\"result\":\"正确/部分正确/错误/未作答/无法判断\",\"observation\":\"可观察事实\"}]}。" + (textOnly ? "\n仅提供用户核对的OCR文字；没有图片，缺失作答或无法判断的题写无法判断：\n" + recognizedText : ""), image: textOnly ? nil : bytes, progress: progress)
             try Task.checkCancellation()
             var recognized = Set<UUID>()
             for r in result.results {
@@ -146,12 +158,12 @@ struct RecordSheetView: View {
         }
     }
     private func preparePhoto(image: UIImage? = nil, data: Data? = nil) async {
-        preparingPhoto = true; photo = nil; photoBytes = nil; checked = false; analysisFinished = false; analysisSummary = ""
+        preparingPhoto = true; recognizedText = ""; textOnly = false; textChecked = false; photo = nil; photoBytes = nil; checked = false; analysisFinished = false; analysisSummary = ""
         let prepared = if let image { await PhotoPreparation.prepare(image: image) }
             else if let data { await PhotoPreparation.prepare(data: data) } else { nil as PreparedPhoto? }
         preparingPhoto = false
         guard let prepared else { store.error = "照片处理失败，请重试。"; return }
-        photo = prepared.preview; photoBytes = prepared.jpeg
+        photo = prepared.preview; photoBytes = prepared.jpeg; recognizedText = prepared.text
     }
     private func save(_ sheet: PracticeSheet) {
         let attempts = sheet.questions.compactMap { q -> Attempt? in

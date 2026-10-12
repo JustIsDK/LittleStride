@@ -60,17 +60,34 @@ struct StrideButtonStyle: ButtonStyle {
 }
 struct StridePressStyle: ButtonStyle {
     var fullWidth = false
+    func makeBody(configuration: Configuration) -> some View {
+        StridePressSurface(label: configuration.label, pressed: configuration.isPressed, fullWidth: fullWidth)
+    }
+}
+private struct StridePressSurface<Label: View>: View {
+    let label: Label
+    let pressed: Bool
+    let fullWidth: Bool
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
+    @State private var highlighted = false
+    var body: some View {
+        label
+            .padding(.horizontal, fullWidth ? 16 : 0)
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: fullWidth ? 56 : 44, alignment: .leading)
+            .background(fullWidth ? (highlighted && enabled ? StrideStyle.green.opacity(0.22) : StrideStyle.pale) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
             .contentShape(Rectangle())
-            .brightness(configuration.isPressed && enabled ? -0.08 : 0)
-            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: configuration.isPressed)
-            .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in pressed && enabled }
+            .brightness(highlighted && enabled ? -0.08 : 0)
+            .opacity(enabled ? (highlighted ? 0.85 : 1) : 0.45)
+            .scaleEffect(highlighted && enabled && !reduceMotion ? 0.95 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: highlighted ? 0.06 : 0.2), value: highlighted)
+            .onChange(of: pressed) { if pressed && enabled { highlighted = true } }
+            .task(id: pressed) {
+                guard !pressed else { return }
+                do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+                highlighted = false
+            }
+            .sensoryFeedback(.impact(weight: .light), trigger: pressed) { _, down in down && enabled }
     }
 }
 struct AnalysisStatusDialog: View {
