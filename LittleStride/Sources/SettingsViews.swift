@@ -109,7 +109,10 @@ struct AISettingsView: View {
         @Bindable var store = store
         Form {
             Section("个人服务连接") {
-                Picker("接口协议", selection: $store.data.ai.api) { Text("Responses"); Text("Chat Completions") }
+                Picker("接口协议", selection: $store.data.ai.api) {
+                    Text("Responses").tag("Responses")
+                    Text("Chat Completions").tag("Chat Completions")
+                }
                 TextField("HTTPS Base URL（可含 /v1）", text: $store.data.ai.baseURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 TextField("准确模型 ID", text: $store.data.ai.model).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField(keyPresent ? "已保存 Key；留空不修改" : "API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
