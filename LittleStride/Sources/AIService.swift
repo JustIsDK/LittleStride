@@ -76,10 +76,11 @@ enum SecretStore {
         guard store.canSave, store.data.ai.credentialScope == nil else { return }
         do {
             let legacy = load()
-            if !legacy.isEmpty, (try? AIService(configuration: store.data.ai).endpoint()) != nil {
+            if !legacy.isEmpty {
+                _ = try AIService(configuration: store.data.ai).endpoint()
                 try save(legacy, account: store.data.ai.keyAccount)
+                try save("")
             }
-            try save("")
             store.data.ai.credentialScope = store.data.ai.keyAccount
             store.save()
         } catch { store.error = "旧 Key 迁移失败，请重新填写：" + error.localizedDescription }

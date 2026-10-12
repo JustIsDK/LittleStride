@@ -222,6 +222,7 @@ struct ProgressView: View {
                     let ids = Set(qs.map(\.id))
                     let history = store.data.attempts.filter { ids.contains($0.questionID) }
                     Text("已记录 \(history.count) 次作答，独立正确 \(history.filter { $0.help == "独立" && $0.result == "正确" }.count) 次")
+                    Button("今天练这个知识点") { Task { await store.addKnowledgeToToday(w.id) } }
                     Text("下次复习：\(w.nextDate.formatted(date: .abbreviated, time: .omitted))").font(.caption)
                     ForEach(qs.prefix(2)) { q in NavigationLink(q.text, destination: QuestionDetailView(id: q.id)) }
                 }

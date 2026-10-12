@@ -49,7 +49,7 @@ xcodebuild -project LittleStride.xcodeproj -scheme LittleStride \
 已通过 generic iOS Simulator Debug 编译。核心规则检查包含：每日上限、延期、同日不算跨日掌握、回录去重、积分去重、跨日掌握与 JSON 序列化。检查使用独立临时目录。
 
 ```sh
-swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
+swiftc LittleStride/Sources/Models.swift LittleStride/Sources/AIService.swift LittleStride/Sources/Store.swift \
   Tests/CoreRulesCheck.swift -o /tmp/LittleStride-CoreRulesCheck
 /tmp/LittleStride-CoreRulesCheck
 ```
@@ -87,6 +87,14 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
 
 ## CloudKit 共享档案
 
-工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录（默认不强制开启签名 capability，以便个人开发团队仍能编译）：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要使用支持 iCloud capability 的 Apple Developer 付费团队，在 Apple Developer / CloudKit Console 创建同名 Container，然后在 Xcode 的 Signing & Capabilities 添加 iCloud/CloudKit，并设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。个人开发团队不支持该 capability，运行时会提示 CloudKit 不可用，但不影响本地题库和 iCloud Drive 备份功能。
+工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录（默认不强制开启签名 capability，以便个人开发团队仍能编译）：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要使用支持 iCloud capability 的 Apple Developer 付费团队，在 Apple Developer / CloudKit Console 创建同名 Container，然后在 Xcode 的 Signing & Capabilities 添加 iCloud/CloudKit，并设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。个人开发团队不支持该 capability，本地题库仍可使用；CloudKit 和 App 直接写入 iCloud Drive 的能力均需正确签名与权限，不能保证个人团队可用。
 
 当前版本完成了共享档案创建、更新和邀请面板；数据仍按整份快照写入，冲突策略暂定为最后一次有效快照覆盖，尚未做题目级别的增量合并。被邀请手机接受分享后的自动接收回调和后台持续同步仍需下一步接入，不能把现有 iCloud Drive 快照按钮当成 CloudKit 自动同步。
+
+## 自选今天练习、收录图片与同类题反馈
+
+- 首页“自选今天练习”可搜索知识点或错题；错题详情提供加入/取消指定入口；学习进展中的知识点也可指定今天练一道题。选择知识点时取该知识点最新的、已核实且今天未完成的题。
+- 手动指定只对当天生效，优先于自动到期选题，可覆盖延后或暂时退出状态；仍受每日剩余时间、学科题量和最多两个知识点约束。不会撤掉之前的手动指定；放不下时明确报错。仅追加指定，不修改知识点长期复习日期；取消后题目可能依然按自动到期规则出现。
+- 确认收录或生成练习时不保留题目的原图引用，保存完成后清理无引用文件。其他题目、历史练习单和 Recovery 快照引用的照片保留；待核实题保留照片。一张照片生成多道候选题时，后续保存待核实题可以从当前照片草稿重新建立图片文件。
+- AI 同类题生成显示处理中/失败原因/成功弹窗，新题先持久化为待核实，成功停留 2 秒后进入新题详情；核对后再加入计划。
+- 回归检查覆盖手动提前复习、知识点选题、重复加入、跨日失效、核实拦截、已完成学科上限、已有指定保护、剩余时间限制、指定落盘和照片引用保护。模拟器编译与启动检查通过，修复无旧 Key 时不必要的 Keychain 删除报错；真实 AI 生成请求和成功跳转尚未联调。

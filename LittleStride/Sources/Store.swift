@@ -76,6 +76,18 @@ import Observation
         }
     }
     func releasePhoto(_ id: UUID) { pinnedPhotos.remove(id) }
+    func discardCollectedPhoto(_ id: UUID) async throws {
+        guard !writing else { throw StoreFailure.persistenceDisabled }
+        writing = true; defer { writing = false }
+        releasePhoto(id)
+        let protected = try await protectedPhotos()
+        guard !protected.contains(id) else { return }
+        let previous = data
+        data.photos.removeAll { $0.id == id }
+        do { try await persist() } catch { data = previous; throw error }
+        let url = photoURL(id)
+        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+    }
     func photoURL(_ id: UUID) -> URL { photosFolder.appendingPathComponent(id.uuidString + ".jpg") }
     func photoData(_ id: UUID) -> Data? { try? Data(contentsOf: photoURL(id)) }
     func knowledgeID(subject: Subject, title: String) -> UUID? {
@@ -107,12 +119,16 @@ import Observation
     func plan(on date: Date = Date()) -> [PlanItem] {
         let calendar = Calendar.current
         let completed = Set(data.attempts.filter { calendar.isDate($0.date, inSameDayAs: date) }.map(\.questionID))
+        let selected = Set((data.todaySelections ?? [:]).filter { calendar.isDate($0.value, inSameDayAs: date) }.keys)
         let candidates = data.questions.filter { q in
             !q.needsVerification && ["收录", "生成练习"].contains(q.screening) && data.subjects.contains(q.subject)
             && !completed.contains(q.id)
-            && (data.deferred[q.id.uuidString].map { calendar.startOfDay(for: $0) <= calendar.startOfDay(for: date) } ?? true)
-            && (weakness(q.weaknessID).map { $0.status != "暂时退出" && calendar.startOfDay(for: $0.nextDate) <= calendar.startOfDay(for: date) } ?? true)
+            && (selected.contains(q.id.uuidString) || (data.deferred[q.id.uuidString].map { calendar.startOfDay(for: $0) <= calendar.startOfDay(for: date) } ?? true))
+            && (selected.contains(q.id.uuidString) || (weakness(q.weaknessID).map { $0.status != "暂时退出" && calendar.startOfDay(for: $0.nextDate) <= calendar.startOfDay(for: date) } ?? true))
         }.sorted {
+            let selectedA = selected.contains($0.id.uuidString), selectedB = selected.contains($1.id.uuidString)
+            if selectedA != selectedB { return selectedA }
+            if selectedA && selectedB { return (data.todaySelections?[$0.id.uuidString] ?? .distantPast) < (data.todaySelections?[$1.id.uuidString] ?? .distantPast) }
             let a = weakness($0.weaknessID), b = weakness($1.weaknessID)
             if a?.priority != b?.priority { return a?.priority == "P1" }
             return (a?.nextDate ?? $0.createdAt) < (b?.nextDate ?? $1.createdAt)
@@ -134,9 +150,44 @@ import Observation
         }
         return result
     }
+    func isSelectedToday(_ id: UUID, on date: Date = Date()) -> Bool {
+        data.todaySelections?[id.uuidString].map { Calendar.current.isDate($0, inSameDayAs: date) } ?? false
+    }
+    func addToToday(_ id: UUID, on date: Date = Date()) async -> Bool {
+        guard let q = question(id), !q.needsVerification, ["收录", "生成练习"].contains(q.screening) else {
+            error = "请先核实题目并选择收录或生成练习。"; return false
+        }
+        guard data.subjects.contains(q.subject) else { error = "请先在学科与题量中开启\(q.subject.rawValue)。"; return false }
+        guard !data.attempts.contains(where: { $0.questionID == id && Calendar.current.isDate($0.date, inSameDayAs: date) }) else {
+            error = "这道题今天已经完成。"; return false
+        }
+        let previous = data.todaySelections
+        var selected = (previous ?? [:]).filter { Calendar.current.isDate($0.value, inSameDayAs: date) }
+        if selected[id.uuidString] == nil { selected[id.uuidString] = date }
+        data.todaySelections = selected
+        let planned = Set(plan(on: date).map(\.id))
+        data.todaySelections = previous
+        guard planned.contains(id), selected.keys.allSatisfy({ key in
+            guard let uuid = UUID(uuidString: key) else { return false }
+            return planned.contains(uuid) || data.attempts.contains { $0.questionID == uuid && Calendar.current.isDate($0.date, inSameDayAs: date) }
+        }) else { error = "今天的时间、学科题量或知识点上限已满，请先调整计划。"; return false }
+        if await confirm({ data.todaySelections = selected }) { notice = "已加入今天练习，可在首页预览练习单。"; return true }
+        return false
+    }
+    func addKnowledgeToToday(_ weaknessID: UUID) async {
+        let candidates = data.questions.filter { $0.weaknessID == weaknessID && !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) }
+            .sorted { $0.createdAt > $1.createdAt }
+        guard let q = candidates.first(where: { q in
+            !data.attempts.contains { $0.questionID == q.id && Calendar.current.isDateInToday($0.date) }
+        }) else { error = "这个知识点暂无已核实且今天未完成的题目。"; return }
+        _ = await addToToday(q.id)
+    }
+    func removeFromToday(_ id: UUID) async {
+        if await confirm({ data.todaySelections?.removeValue(forKey: id.uuidString) }) { notice = "已取消指定；到期题仍可能按自动计划出现。" }
+    }
     func deferQuestions(_ ids: [UUID], days: Int) async {
         let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()
-        if await confirm({ for id in ids { data.deferred[id.uuidString] = date } }) { notice = "已延后，后续计划仍遵守每日时间上限。" }
+        if await confirm({ for id in ids { data.deferred[id.uuidString] = date; data.todaySelections?.removeValue(forKey: id.uuidString) } }) { notice = "已延后，后续计划仍遵守每日时间上限。" }
     }
     func makeSheet(_ questions: [Question]) -> PracticeSheet {
         let sheet = PracticeSheet(questions: questions); data.sheets.append(sheet); return sheet
@@ -227,6 +278,7 @@ import Observation
               }),
               [5, 10].contains(incoming.dailyMinutes),
               (0...23).contains(incoming.reminderHour), (0...59).contains(incoming.reminderMinute),
+              (incoming.todaySelections ?? [:]).keys.allSatisfy({ UUID(uuidString: $0).map { ids.contains($0) } ?? false }),
               incoming.counts.allSatisfy({ Subject(rawValue: $0.key) != nil && (1...3).contains($0.value) }),
               incoming.rewards.allSatisfy({ [1, 5].contains($0.points) }),
               incoming.photos.allSatisfy({ $0.data != nil || FileManager.default.fileExists(atPath: photoURL($0.id).path) }),

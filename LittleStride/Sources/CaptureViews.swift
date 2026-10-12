@@ -10,8 +10,9 @@ struct QuestionEditorView: View {
     @State private var question: Question
     @State private var knowledge: String
     private let editing: Bool
-    init(existing: Question? = nil, ai: AIQuestion? = nil, parent: Question? = nil, imageID: UUID? = nil) {
-        editing = existing != nil
+    private let sourcePhoto: Data?
+    init(existing: Question? = nil, ai: AIQuestion? = nil, parent: Question? = nil, imageID: UUID? = nil, photoBytes: Data? = nil) {
+        editing = existing != nil; sourcePhoto = photoBytes
         if let existing { _question = State(initialValue: existing); _knowledge = State(initialValue: "") }
         else if let ai {
             let q = Question(subject: Subject(rawValue: ai.subject) ?? parent?.subject ?? .math, text: ai.text, answer: ai.answer, explanation: parent == nil ? "" : ai.observation, originalAnswer: ai.studentAnswer, source: parent == nil ? "AI 图片分析（待核实）" : "AI 同类题", imageID: imageID, parentID: parent?.id, weaknessID: parent?.weaknessID, evidence: parent == nil ? ai.observation : "", possibleCause: ai.possibleCause, screening: parent == nil ? "待核实" : "生成练习")
@@ -43,15 +44,27 @@ struct QuestionEditorView: View {
                 if !question.needsVerification && question.answer.isEmpty { store.error = "确认练习前请补充答案。"; return }
                 if question.needsVerification { question.screening = "待核实" }
                 Task {
+                    let retainsPhoto = question.needsVerification || !["收录", "生成练习"].contains(question.screening)
+                    if retainsPhoto, let imageID = question.imageID, store.photoData(imageID) == nil {
+                        guard let sourcePhoto else { store.error = "原图已清理，请重新拍照核实，或确认题目后收录。"; return }
+                        do { question.imageID = try store.addPhoto(sourcePhoto) } catch { store.error = error.localizedDescription; return }
+                    }
+                    let previousImageID = question.imageID
                     let saved = await store.confirm {
+                        if !question.needsVerification && ["收录", "生成练习"].contains(question.screening) { question.imageID = nil }
                         if editing, let index = store.data.questions.firstIndex(where: { $0.id == question.id }) {
                             question.weaknessID = store.knowledgeID(subject: question.subject, title: knowledge)
                             store.data.questions[index] = question
                         } else { store.add(question, knowledge: knowledge) }
                     }
-                    if saved { dismiss() }
+                    if saved {
+                        if let previousImageID, question.imageID == nil {
+                            do { try await store.discardCollectedPhoto(previousImageID) } catch { store.error = "题目已保存，原图清理失败：" + error.localizedDescription }
+                        }
+                        dismiss()
+                    } else { question.imageID = previousImageID }
                 }
-            }.disabled(question.text.isEmpty)
+            }.disabled(question.text.isEmpty || store.writing)
         }.navigationTitle(editing ? "核实与修改" : "录入题目").stridePage()
         .onChange(of: question.needsVerification) {
             if !question.needsVerification && question.screening == "待核实" { question.screening = question.parentID == nil ? "收录" : "生成练习" }
@@ -181,7 +194,7 @@ struct CaptureView: View {
                             Button("重新分析这张照片") { confirmRetry = true }.font(.caption)
                         }.id("analysisResult").transition(.opacity)
                     }
-                    ForEach(Array(results.enumerated()), id: \.offset) { _, q in NavigationLink(destination: QuestionEditorView(ai: q, imageID: imageID)) { StrideCard { Tag(text: q.subject); Text(q.text); Text(q.observation).font(.caption).foregroundStyle(.secondary); Text("核对并入库 →") } }.disabled(analysis.busy) }
+                    ForEach(Array(results.enumerated()), id: \.offset) { _, q in NavigationLink(destination: QuestionEditorView(ai: q, imageID: imageID, photoBytes: imageBytes)) { StrideCard { Tag(text: q.subject); Text(q.text); Text(q.observation).font(.caption).foregroundStyle(.secondary); Text("核对并入库 →") } }.disabled(analysis.busy) }
                     if let textbook { NavigationLink("核对教材信息并填写档案", destination: TextbookConfirmView(analysis: textbook)).disabled(analysis.busy) }
                     if mode == "作业入库" { NavigationLink("不用 AI，手动录入题目", destination: QuestionEditorView()) }
                 }
@@ -233,7 +246,7 @@ struct CaptureView: View {
         guard let bytes = imageBytes else { return }
         let runID = analysis.id
         do {
-            if imageID == nil { imageID = try store.addPhoto(bytes) }
+            if imageID == nil || imageID.map({ store.photoData($0) == nil }) == true { imageID = try store.addPhoto(bytes) }
             let service = AIService(configuration: store.data.ai, timing: { value in Task { @MainActor in if analysis.id == runID { analysis.timing.merge(value) } } })
             let progress: @Sendable (String) -> Void = { stage in Task { @MainActor in if analysis.busy && analysis.id == runID { analysis.stage = stage } } }
             if mode == "教材与进度" {

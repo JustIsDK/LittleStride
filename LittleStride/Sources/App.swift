@@ -107,7 +107,7 @@ struct AnalysisStatusDialog: View {
             VStack(spacing: 18) {
                 if busy { SwiftUI.ProgressView().controlSize(.large).tint(StrideStyle.green) }
                 else { Image(systemName: success ? "checkmark.circle.fill" : "exclamationmark.circle.fill").font(.system(size: 44)).foregroundStyle(success ? StrideStyle.green : StrideStyle.warning) }
-                Text(busy ? "正在分析照片" : success ? "分析成功" : "分析失败").font(.title3.weight(.semibold))
+                Text(busy ? "正在处理" : success ? "处理成功" : "处理失败").font(.title3.weight(.semibold))
                 Text(message).font(.subheadline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 if busy {
                     TimelineView(.periodic(from: started, by: 1)) { context in
@@ -115,7 +115,7 @@ struct AnalysisStatusDialog: View {
                     }
                     Button("取消分析", action: cancel).buttonStyle(StrideButtonStyle(secondary: true))
                 } else if success {
-                    Text("2 秒后自动展示结果，请核对后保存。").font(.caption).foregroundStyle(.secondary)
+                    Text("2 秒后自动展示结果，请核对内容。").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Button("返回修改或重试", action: close).buttonStyle(StrideButtonStyle())
                 }
@@ -203,6 +203,7 @@ struct TodayView: View {
                         }
                     }.font(.caption).frame(minHeight: 44)
                 }
+                NavigationLink("自选今天练习", destination: TodaySelectionView())
                 growth
                 if pendingCount > 0 { pendingMaterials }
                 utilities
@@ -466,7 +467,11 @@ struct QuestionDetailView: View {
     @Environment(LearningStore.self) private var store
     let id: UUID
     @State private var busy = false
-    @State private var generated: AIQuestion?
+    @State private var generatedQuestionID: UUID?
+    @State private var generateDialog = false
+    @State private var generateError: String?
+    @State private var generateStarted = Date()
+    @State private var generateTask: Task<Void, Never>?
     var body: some View {
         ScrollView {
             if let q = store.question(id) {
@@ -476,19 +481,68 @@ struct QuestionDetailView: View {
                     if let imageID = q.imageID, let bytes = store.photoData(imageID), let image = UIImage(data: bytes) { Image(uiImage: image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 16)) }
                     if let w = store.weakness(q.weaknessID) { StrideCard { Text(w.title).font(.headline); Text("\(w.priority) · \(w.status)"); Text("下次回看：\(w.nextDate.formatted(date: .abbreviated, time: .omitted))") } }
                     NavigationLink("修改题目 / 核实信息", destination: QuestionEditorView(existing: q))
-                    Button(busy ? "生成中…" : "AI 生成一道同类题") { Task { await generate(q) } }.buttonStyle(StrideButtonStyle()).disabled(busy || q.needsVerification)
-                    Text("生成内容须核对后入库，不自动增加今日任务或奖励。").font(.caption).foregroundStyle(.secondary)
-                    if let generated { NavigationLink("核对生成题并入库", destination: QuestionEditorView(ai: generated, parent: q)) }
+                    Button(busy ? "生成中…" : "AI 生成一道同类题") { generateTask = Task { await generate(q) } }.buttonStyle(StrideButtonStyle()).disabled(busy || q.needsVerification)
+                    Button(store.isSelectedToday(q.id) ? "取消指定今天练习" : "加入今天练习") {
+                        Task { if store.isSelectedToday(q.id) { await store.removeFromToday(q.id) } else { _ = await store.addToToday(q.id) } }
+                    }.buttonStyle(StrideButtonStyle(secondary: true)).disabled(busy || q.needsVerification || !["收录", "生成练习"].contains(q.screening))
+                    Text("生成的新题会保存为待核实，核对后再安排练习。").font(.caption).foregroundStyle(.secondary)
                     let attempts = store.data.attempts.filter { $0.questionID == id }.sorted { $0.date > $1.date }
                     Text("作答历程").font(.headline)
                     ForEach(attempts) { a in StrideCard { Text(a.date.formatted(date: .abbreviated, time: .shortened)); Text("\(a.result) · \(a.help)"); Text(a.note); Text("理由说明：\(a.reason)").font(.caption) } }
                 }.padding(20)
             }
         }.background(StrideStyle.background).navigationTitle("题目详情").stridePage()
+        .navigationDestination(item: $generatedQuestionID) { QuestionDetailView(id: $0) }
+        .overlay {
+            if generateDialog {
+                AnalysisStatusDialog(busy: busy, success: generateError == nil, message: generateError ?? "同类题已生成，正在打开新题目详情。", started: generateStarted, cancel: { generateTask?.cancel(); generateDialog = false }, close: { generateDialog = false })
+            }
+        }
     }
     private func generate(_ q: Question) async {
-        busy = true; defer { busy = false }
-        do { let result = try await AIService(configuration: store.data.ai).generate(q, profile: store.data.profile); guard let first = result.questions.first, !first.text.isEmpty, !first.answer.isEmpty else { throw ServiceFailure(message: "生成结果没有完整题目和答案。") }; generated = first }
-        catch { store.error = error.localizedDescription }
+        guard !busy else { return }
+        busy = true; generateError = nil; generateDialog = true; generateStarted = Date()
+        defer { busy = false }
+        do {
+            let result = try await AIService(configuration: store.data.ai).generate(q, profile: store.data.profile)
+            guard let first = result.questions.first, !first.text.isEmpty, !first.answer.isEmpty else { throw ServiceFailure(message: "生成结果没有完整题目和答案。") }
+            try Task.checkCancellation()
+            let generatedQuestion = Question(subject: Subject(rawValue: first.subject) ?? q.subject, text: first.text, answer: first.answer, explanation: first.observation, originalAnswer: first.studentAnswer, source: "AI 同类题", parentID: q.id, weaknessID: q.weaknessID, possibleCause: first.possibleCause, needsVerification: true, screening: "待核实")
+            guard await store.confirm({ store.data.questions.append(generatedQuestion) }) else { throw ServiceFailure(message: "新题生成了，但保存失败，请稍后重试。") }
+            busy = false
+            try await Task.sleep(for: .seconds(2))
+            generateDialog = false
+            generatedQuestionID = generatedQuestion.id
+        } catch {
+            if Task.isCancelled { generateDialog = false }
+            else { generateError = error.localizedDescription }
+        }
+    }
+}
+
+struct TodaySelectionView: View {
+    @Environment(LearningStore.self) private var store
+    @State private var search = ""
+    var body: some View {
+        List {
+            Section {
+                Text("指定题目优先安排；仍遵守今日剩余时间、每科题量和最多两个知识点。已完成题不重复添加，待核实题请先核对。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("按知识点选择一道题") {
+                ForEach(store.data.weaknesses.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { w in
+                    Button { Task { await store.addKnowledgeToToday(w.id) } } label: {
+                        HStack { Text(w.title); Spacer(); Text(w.subject.rawValue).foregroundStyle(.secondary); Image(systemName: "plus.circle") }
+                    }
+                }
+            }
+            Section("选择错题") {
+                ForEach(store.data.questions.filter { !$0.needsVerification && ["收录", "生成练习"].contains($0.screening) && (search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)) }) { q in
+                    Button { Task { if store.isSelectedToday(q.id) { await store.removeFromToday(q.id) } else { _ = await store.addToToday(q.id) } } } label: {
+                        HStack { Text(q.text).lineLimit(3); Spacer(); Image(systemName: store.isSelectedToday(q.id) ? "checkmark.circle.fill" : "plus.circle") }
+                    }
+                }
+            }
+        }.navigationTitle("自选今天练习").searchable(text: $search, prompt: "题目或知识点").stridePage()
     }
 }

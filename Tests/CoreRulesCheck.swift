@@ -41,6 +41,55 @@ import Foundation
         precondition(store.data.questions.count == 2)
         let recovery = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("Recovery"), includingPropertiesForKeys: nil)
         precondition(!recovery.isEmpty)
+        let customStore = LearningStore(directory: directory.appendingPathComponent("manual"))
+        let future = Date().addingTimeInterval(86400 * 5)
+        let knowledge = Weakness(subject: .math, title: "手动指定", status: "暂时退出", nextDate: future)
+        var chosen = Question(subject: .math, text: "今天想练的题", answer: "1", weaknessID: knowledge.id, needsVerification: false, screening: "收录")
+        let waiting = Question(subject: .math, text: "未核实的题", answer: "1", weaknessID: knowledge.id)
+        customStore.data.weaknesses = [knowledge]
+        customStore.data.questions = [chosen, waiting]
+        customStore.data.deferred[chosen.id.uuidString] = future
+        precondition(customStore.plan().isEmpty)
+        let added = await customStore.addToToday(chosen.id)
+        precondition(added && customStore.plan().first?.id == chosen.id)
+        let duplicate = await customStore.addToToday(chosen.id)
+        precondition(duplicate && customStore.plan().count == 1)
+        let invalidChoice = await customStore.addToToday(waiting.id)
+        precondition(!invalidChoice)
+        let nextDay = Date().addingTimeInterval(86400)
+        precondition(customStore.plan(on: nextDay).isEmpty)
+        let manualReload = LearningStore(directory: directory.appendingPathComponent("manual"))
+        precondition(manualReload.isSelectedToday(chosen.id))
+        await customStore.removeFromToday(chosen.id)
+        precondition(customStore.plan().isEmpty)
+        customStore.data.counts[Subject.math.rawValue] = 1
+        customStore.data.attempts = [Attempt(questionID: chosen.id, answer: "1", result: "正确", help: "独立", reason: "能", corrected: false)]
+        let extra = Question(subject: .math, text: "另一题", answer: "2", weaknessID: knowledge.id, needsVerification: false, screening: "收录")
+        customStore.data.questions.append(extra)
+        let overflow = await customStore.addToToday(extra.id)
+        precondition(!overflow && !customStore.isSelectedToday(extra.id))
+        customStore.data.attempts = []
+        await customStore.addKnowledgeToToday(knowledge.id)
+        precondition(customStore.isSelectedToday(extra.id))
+        let displaced = await customStore.addToToday(chosen.id)
+        precondition(!displaced && customStore.isSelectedToday(extra.id) && !customStore.isSelectedToday(chosen.id))
+        await customStore.removeFromToday(extra.id)
+        customStore.data.dailyMinutes = 2
+        let noTime = await customStore.addToToday(chosen.id)
+        precondition(!noTime && customStore.plan().isEmpty)
+        customStore.data.dailyMinutes = 15
+        let photo = try customStore.addPhoto(Data([1, 2, 3]))
+        chosen.imageID = photo; customStore.data.questions[0] = chosen
+        try await customStore.persist()
+        try await customStore.discardCollectedPhoto(photo)
+        precondition(customStore.photoData(photo) != nil)
+        customStore.data.questions[0].imageID = nil
+        try await customStore.persist()
+        try await customStore.discardCollectedPhoto(photo)
+        precondition(customStore.photoData(photo) == nil && !customStore.data.photos.contains { $0.id == photo })
+        let cleanedReload = LearningStore(directory: directory.appendingPathComponent("manual"))
+        precondition(cleanedReload.data.questions[0].imageID == nil)
+        print("PASS: manual selection, overdue override, duplicate selection, verification guard, daily expiry, persisted selections, daily subject cap, referenced photo protection, collected photo deletion")
         print("PASS: plan, deferral, reward idempotency, cross-day mastery, JSON round trip, persisted reload, validated restore, recovery snapshot")
     }
 }

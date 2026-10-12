@@ -159,6 +159,7 @@ struct AppData: Codable {
     var counts: [String: Int] = ["数学": 2, "语文": 1, "英语": 1]
     var dailyMinutes = 10
     var deferred: [String: Date] = [:]
+    var todaySelections: [String: Date]?
     var reminder = false
     var reminderHour = 19
     var reminderMinute = 45
