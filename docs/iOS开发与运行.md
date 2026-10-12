@@ -84,3 +84,9 @@ swiftc LittleStride/Sources/Models.swift LittleStride/Sources/Store.swift \
 - 题目确认、回录确认、生成练习单、延期、AI 配置保存等待磁盘写入完成；写入异常不提示成功。底部导航保持稳定身份，各用途保留自己的草稿。回录换图/重试清除未被用户修改的旧 AI 字段。
 - 掌握只采用最近失败或新增原题之后的成功证据；重复掌握保留原奖励且不重复发放。计划扣除当天已完成的各科题量。编辑重新按学科和知识点建立关联，清空可解除关联。长题 PDF 使用 CoreText 跨页排版。
 - 本次 generic iOS Simulator Debug 编译通过，未新增或运行测试。既有规则检查仅更新 async 调用及确认落盘所需等待。真实 AI、真机相机、迁移/恢复、缓存清理、PDF 打印和 iCloud 行为尚待实机验收。
+
+## CloudKit 共享档案
+
+工程已接入 `iCloud.com.justisdk.LittleStride` 的 CloudKit 共享记录：共享根记录保存一份带照片的 `CKAsset` 快照，家长邀请使用系统 CloudKit 分享面板。真机发布前需要在 Apple Developer / CloudKit Console 创建同名 Container、开启 CloudKit capability，并在 Xcode 设置 `CLOUDKIT_CONTAINER_ENVIRONMENT`（开发环境或生产环境）。
+
+当前版本完成了共享档案创建、更新和邀请面板；数据仍按整份快照写入，冲突策略暂定为最后一次有效快照覆盖，尚未做题目级别的增量合并。被邀请手机接受分享后的自动接收回调和后台持续同步仍需下一步接入，不能把现有 iCloud Drive 快照按钮当成 CloudKit 自动同步。

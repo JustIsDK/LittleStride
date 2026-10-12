@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import CloudKit
 
 struct ProfileView: View {
     @Environment(LearningStore.self) private var store
@@ -277,6 +278,9 @@ struct DataSettingsView: View {
     @State private var cacheStatus = ""
     @State private var confirmClear = false
     @State private var cloudStatus = "尚未检查 iCloud 可用性"
+    @StateObject private var cloud = CloudKitSync()
+    @State private var cloudShare: CKShare?
+    @State private var showingCloudShare = false
     var body: some View {
         Form {
             Section("完整本地备份") {
@@ -290,6 +294,12 @@ struct DataSettingsView: View {
                 Button(busy ? "处理中…" : "备份到 iCloud") { Task { await upload() } }.disabled(busy)
                 Button("从 iCloud 读取最近备份") { Task { await download() } }.disabled(busy)
                 Text("此版本提供手动云端快照与恢复。自动多设备同步和冲突合并尚未开启。需要签名时配置 iCloud 容器；不可用时会明确报错。").font(.caption)
+            }
+            Section("CloudKit 共享档案") {
+                Text(cloud.state).font(.caption)
+                Button("创建 / 更新共享档案") { Task { await publishSharedProfile() } }.disabled(busy)
+                Button("邀请另一位家长") { Task { await inviteParent() } }.disabled(busy || cloudShare == nil)
+                Text("创建后可通过系统分享面板邀请另一位家长。双方使用自己的 Apple ID，题目、作答和照片通过同一个 CloudKit 档案同步。首次版本按整份快照同步，冲突时以后一次有效写入为准。").font(.caption).foregroundStyle(.secondary)
             }
             Section("本地缓存") {
                 Text(cacheStatus).font(.caption)
@@ -307,6 +317,9 @@ struct DataSettingsView: View {
             Button("取消", role: .cancel) {}
         }
         .sheet(item: $share) { SystemShare(items: $0.items) }
+        .sheet(isPresented: $showingCloudShare) {
+            if let cloudShare { CloudShareSheet(share: cloudShare, container: cloud.container) }
+        }
         .fileImporter(isPresented: $importer, allowedContentTypes: [.json]) { result in
             do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; incoming = try Data(contentsOf: url); confirmRestore = true }
             catch { store.error = error.localizedDescription }
@@ -330,6 +343,20 @@ struct DataSettingsView: View {
         busy = true; defer { busy = false }
         do { try await CloudSnapshots.upload(try await store.backupBytes()); cloudStatus = "备份已写入 iCloud Drive 本地容器，系统负责上传。\(Date().formatted(date: .abbreviated, time: .shortened))" }
         catch { cloudStatus = error.localizedDescription }
+    }
+    private func publishSharedProfile() async {
+        busy = true; defer { busy = false }
+        do {
+            let id = store.data.sharedProfileID ?? UUID()
+            let bytes = try await store.backupBytes()
+            let share = try await cloud.createOrUpdate(snapshot: bytes, profileID: id)
+            if store.data.sharedProfileID == nil { store.data.sharedProfileID = id; try await store.persist() }
+            cloudShare = share; cloudStatus = "共享档案已更新。"
+        } catch { cloudStatus = error.localizedDescription }
+    }
+    private func inviteParent() async {
+        guard cloudShare != nil else { return }
+        showingCloudShare = true
     }
     private func download() async {
         busy = true; defer { busy = false }

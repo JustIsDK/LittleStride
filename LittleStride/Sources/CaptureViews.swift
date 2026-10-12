@@ -56,6 +56,14 @@ struct QuestionEditorView: View {
         .onChange(of: question.needsVerification) {
             if !question.needsVerification && question.screening == "待核实" { question.screening = question.parentID == nil ? "收录" : "生成练习" }
         }
+        .onChange(of: question.screening) {
+            // Choosing a final handling state is the explicit confirmation step.
+            if ["收录", "生成练习", "观察", "不纳入"].contains(question.screening) {
+                question.needsVerification = false
+            } else if question.screening == "待核实" {
+                question.needsVerification = true
+            }
+        }
         .onAppear { if editing, let w = store.weakness(question.weaknessID) { knowledge = w.title } }
     }
 }

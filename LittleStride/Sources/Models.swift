@@ -164,6 +164,8 @@ struct AppData: Codable {
     var reminderMinute = 45
     var ai = AIConfiguration()
     var updatedAt = Date()
+    /// Stable identity used by CloudKit sharing. It is deliberately separate from the local file path.
+    var sharedProfileID: UUID?
 }
 struct PlanItem: Identifiable {
     var question: Question

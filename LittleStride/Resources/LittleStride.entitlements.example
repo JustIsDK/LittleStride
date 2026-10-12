@@ -9,10 +9,13 @@
 	<key>com.apple.developer.icloud-services</key>
 	<array>
 		<string>CloudDocuments</string>
+		<string>CloudKit</string>
 	</array>
 	<key>com.apple.developer.ubiquity-container-identifiers</key>
 	<array>
 		<string>iCloud.com.justisdk.LittleStride</string>
 	</array>
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>$(CLOUDKIT_CONTAINER_ENVIRONMENT)</string>
 </dict>
 </plist>
